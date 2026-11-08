@@ -1,0 +1,112 @@
+# ============================================================
+# 施工安全规范智能问答系统 配置
+# 所有敏感/环境相关项都可用环境变量覆盖（IDEA 里在运行配置的
+# Environment variables 一栏填写，或直接改这里的默认值）
+# ============================================================
+
+server:
+  port: 8080
+  error:
+    # 把后端异常原因原样带给前端：否则接口报 500 时前端只能显示"入库失败：HTTP 500"，
+    # 看不到"Chroma 未启动""向量维度不一致"这类真正有用的定位信息。
+    include-message: always
+
+spring:
+  application:
+    name: safety-rag-qa
+  # 关掉 Spring AI 的 Chroma 自动配置，改用 config/ChromaVectorStoreConfig 自行装配：
+  # Spring AI 1.0.0 靠"精确匹配错误文案"判断集合是否存在，而真实 Chroma 返回的文案
+  # 对不上，导致空的向量库永远启动失败（Collection xxx does not exist.）。
+  autoconfigure:
+    exclude:
+      - org.springframework.ai.vectorstore.chroma.autoconfigure.ChromaVectorStoreAutoConfiguration
+  servlet:
+    multipart:
+      # 单个文件上限；max-request-size 是整批（批量上传一次可能带十几个文件）
+      max-file-size: 50MB
+      max-request-size: 200MB
+  http:
+    client:
+      # 调用百炼用 JDK 自带的 java.net.http.HttpClient，不要用默认的 Apache HttpClient5。
+      # 实测（同一台机器、同一个 key）：HttpClient5 发 chat 请求必然在 ~19 秒后被
+      # "Connection reset"，连着 4 次全失败；JDK HttpClient 3/3 成功、4~6 秒返回。
+      # 换成 jdk 后 chat / 流式 / embedding 全部正常，故此处固定下来。
+      factory: jdk
+      # 连接与读取超时：读取超时按"单次读"计时，流式逐 token 到达不受影响
+      connect-timeout: 10s
+      read-timeout: 120s
+  ai:
+    # Spring AI 自带的重试（包裹每一次 HTTP 调用）。百炼侧偶发 15~20 秒后
+    # Connection reset，单次失败重试比整批入库重来便宜得多：
+    # 3 次尝试、1s/2s 退避，最坏多花 3 秒而不是让 171 块的文档整个失败。
+    retry:
+      max-attempts: 3
+      backoff:
+        initial-interval: 1s
+        multiplier: 2
+        max-interval: 6s
+    # ---------- OpenAI 兼容模型配置 ----------
+    # 默认指向通义千问的 OpenAI 兼容端点；换 Kiwi 时改 base-url 即可：
+    #   Kiwi:      https://api.Kiwi.com
+    #   通义千问:      https://dashscope.aliyuncs.com/compatible-mode
+    openai:
+      base-url: ${LLM_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode}
+      # 注意：这里只放占位符，绝不提交真实 key。
+      # 真实 key 通过环境变量 LLM_API_KEY 注入（IDEA 运行配置 / 命令行 / 系统环境变量均可）。
+      # 没有 key 时请把 app.demo-mode 设为 true（见文末），应用不会因缺少 key 而启动失败。
+      api-key: ${LLM_API_KEY:sk-placeholder-set-LLM_API_KEY-in-env}
+      chat:
+        options:
+          model: ${LLM_CHAT_MODEL:qwen-plus}
+          temperature: 0.2
+      embedding:
+        options:
+          # 通义 text-embedding-v3（1024 维）；也可替换为服务端提供的
+          # bge-large-zh-v1.5 等兼容端点模型名
+          model: ${LLM_EMBEDDING_MODEL:text-embedding-v3}
+
+# ---------- 向量库 ----------
+# 默认：SimpleVectorStore（内存 + data/simple-vector-store.json 持久化，零外部依赖），
+#       见 config/VectorStoreConfig.java —— 不装 Docker / Chroma 也能直接跑。
+# 可选：加 --spring.profiles.active=chroma 切到 Chroma，
+#       连接参数见 application-chroma.yml，装配见 config/ChromaVectorStoreConfig.java。
+# 两者靠 profile 互斥（!chroma / chroma），不会同时存在两个 VectorStore Bean。
+
+# ---------- 本项目自定义配置（对应 config/AppProperties） ----------
+app:
+  # 演示模式开关：
+  #   true  = 不调用任何外部模型 API，使用本地兜底 Embedding（字符 n-gram 哈希）
+  #           + 抽取式回答（直接拼召回片段），无 key 也能完整演示全链路；
+  #   false = 使用上面配置的真实聊天/向量模型。
+  demo-mode: ${APP_DEMO_MODE:false}
+  # 原始文档与注册表的存放目录（相对路径以项目根目录为准）
+  data-dir: ${APP_DATA_DIR:./data}
+  chunking:
+    # 单块最大字符数（条款切分时整条超过该值才启用窗口兜底切分）
+    chunk-size: 500
+    # 窗口兜底切分时的重叠字符数
+    overlap: 60
+  retrieval:
+    # 向量检索的最低相似度（低于该值的召回视为无召回，避免硬编答案）
+    min-score: 0.20
+    # 是否启用 BM25 关键词混合召回
+    hybrid-enabled: true
+    # 混合合并权重：最终分 = vectorWeight*向量分 + bm25Weight*BM25归一化分
+    vector-weight: 0.7
+    bm25-weight: 0.3
+    # BM25 路的参与方式。
+    # BM25 只认字面、不认语义：问题里只要有一个字出现在块里就有正分，且归一化后
+    # 必然有 top1（=1.0）。若允许它单独引入新块，问"今天食堂吃什么"也会凑出
+    # 几条食堂条款，"无召回不编造"就成了死代码（这是本项目修复过的一个真实缺陷）。
+    #   false（默认）= BM25 只给向量路已召回的候选加权排序；
+    #   true         = 回到"两路各自取候选"的经典做法，仅供对照实验。
+    # 演示模式（app.demo-mode=true）与向量库调用失败时，无论本项如何都会放开，
+    # 因为此时 BM25 是唯一可用的召回手段。
+    bm25-introduce-new: false
+    # BM25 原始分下限：低于它的块不参与加权（挡掉只蹭到零星字词的低分块）
+    min-bm25-score: 1.0
+
+logging:
+  level:
+    com.example.safetyrag: INFO
+    org.springframework.ai: INFO

@@ -1,0 +1,116 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <!-- Spring Boot 3.4.x：与 JDK 21、Spring AI 1.0.x 兼容的组合 -->
+    <parent>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-parent</artifactId>
+        <version>3.4.5</version>
+        <relativePath/>
+    </parent>
+
+    <groupId>com.example</groupId>
+    <artifactId>safety-rag-qa</artifactId>
+    <version>1.0.0</version>
+    <name>safety-rag-qa</name>
+    <description>基于 RAG 的施工安全规范智能问答系统（课程设计）</description>
+
+    <properties>
+        <!-- 环境锁定：IntelliJ IDEA + Maven 3.9.12 + JDK 21 -->
+        <java.version>21</java.version>
+        <maven.compiler.release>21</maven.compiler.release>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <!-- Spring AI 1.0.x，与 Spring Boot 3.4.x 对齐 -->
+        <spring-ai.version>1.0.0</spring-ai.version>
+    </properties>
+
+    <dependencyManagement>
+        <dependencies>
+            <dependency>
+                <groupId>org.springframework.ai</groupId>
+                <artifactId>spring-ai-bom</artifactId>
+                <version>${spring-ai.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
+
+    <dependencies>
+        <!-- Web 层（同时提供 Flux/SSE 流式返回的适配支持） -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-web</artifactId>
+        </dependency>
+
+        <!-- Jackson：显式声明，避免个别环境下传递依赖未解析导致
+             com.fasterxml.jackson.core 包缺失（版本由 Boot 父 POM 管理） -->
+        <dependency>
+            <groupId>com.fasterxml.jackson.core</groupId>
+            <artifactId>jackson-databind</artifactId>
+        </dependency>
+
+        <!-- HTTP 客户端换成 Apache HttpClient 5（纯 HTTP/1.1）：
+             Spring 的 RestClient 检测到它后就不再用 JDK 自带 HttpClient。
+             JDK HttpClient 默认会尝试 h2c 升级（Upgrade: h2c），Chroma 的
+             uvicorn/Rust 服务端处理不了带请求体的升级头，POST upsert 会被
+             判为 Invalid HTTP request 返回 400，甚至直接断开连接。 -->
+        <dependency>
+            <groupId>org.apache.httpcomponents.client5</groupId>
+            <artifactId>httpclient5</artifactId>
+        </dependency>
+
+        <!-- Spring AI：OpenAI 兼容模型接入（聊天 + 向量化）。
+             base-url 可指向通义千问兼容端点、Kiwi 或本地兼容服务。 -->
+        <dependency>
+            <groupId>org.springframework.ai</groupId>
+            <artifactId>spring-ai-starter-model-openai</artifactId>
+        </dependency>
+
+        <!-- Spring AI：Chroma 向量库实现（VectorStore 抽象的默认实现） -->
+        <dependency>
+            <groupId>org.springframework.ai</groupId>
+            <artifactId>spring-ai-starter-vector-store-chroma</artifactId>
+        </dependency>
+
+        <!-- Spring AI：PDF 文档读取（PagePdfDocumentReader） -->
+        <dependency>
+            <groupId>org.springframework.ai</groupId>
+            <artifactId>spring-ai-pdf-document-reader</artifactId>
+        </dependency>
+
+        <!-- Spring AI：Tika 文档读取（TikaDocumentReader）。
+             施工现场的规范大多以 Word 下发（docx/doc/wps），只有 PDF 一条路
+             会让用户第一次上传就失败；Tika 一并将 pptx/xlsx/html 也覆盖掉。
+             PDF 仍走 PagePdfDocumentReader —— 它能给出页码，Tika 给不了。 -->
+        <dependency>
+            <groupId>org.springframework.ai</groupId>
+            <artifactId>spring-ai-tika-document-reader</artifactId>
+        </dependency>
+
+        <!-- 配置属性绑定（@ConfigurationProperties） -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-validation</artifactId>
+        </dependency>
+
+        <!-- 测试：JUnit 5 -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+            </plugin>
+        </plugins>
+    </build>
+</project>

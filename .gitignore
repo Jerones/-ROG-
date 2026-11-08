@@ -1,0 +1,33 @@
+# ---------- 构建产物 ----------
+target/
+*.jar
+backup/
+
+# ---------- 运行时数据 ----------
+# data/docs/ 是上传的原始规范文档，data/simple-vector-store.json 是向量快照，
+# 都含本机内容且体积大（实测 21MB+），不入库；克隆后首次运行会自动创建。
+data/
+!data/README.txt
+
+# ---------- 本机环境相关 ----------
+hosts
+.env
+.run.log
+.run.pid
+*.log
+*.pid
+
+# ---------- IDE ----------
+.idea/
+*.iml
+*.ipr
+*.iws
+.vscode/
+.settings/
+.classpath
+.project
+
+# ---------- 系统 ----------
+.DS_Store
+Thumbs.db
+desktop.ini

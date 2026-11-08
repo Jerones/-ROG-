@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>施工安全规范问答 · RAG</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="layout">
+    <!-- ============ 左侧边栏 ============ -->
+    <aside class="sidebar">
+        <div class="brand">
+            <div class="brand-title">施工安全规范问答</div>
+            <div class="brand-sub">RAG 智能问答系统</div>
+            <span id="demoBadge" class="badge hidden">演示模式</span>
+        </div>
+
+        <nav class="menu">
+            <button id="menuChat" class="menu-item active" onclick="switchMenu('chat')">
+                <svg class="menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+                <span>对话</span>
+            </button>
+            <button id="menuKb" class="menu-item" onclick="switchMenu('kb')">
+                <svg class="menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
+                <span>知识库</span>
+            </button>
+        </nav>
+
+        <!-- 边栏底部：知识库统计小卡片 -->
+        <div class="side-card">
+            <div class="side-card-title">知识库概览</div>
+            <div class="side-card-row"><span>文档</span><b id="sideStatDocs">-</b></div>
+            <div class="side-card-row"><span>文本块</span><b id="sideStatChunks">-</b></div>
+        </div>
+        <div class="sidebar-foot">Spring AI · VectorStore<br>默认 SimpleVectorStore</div>
+    </aside>
+
+    <main class="main">
+        <!-- ============ 菜单一：对话 ============ -->
+        <section id="viewChat" class="view">
+            <div id="messages" class="messages">
+                <div class="chat-col" id="msgCol">
+                    <!-- 空状态：标题 + 示例问题 -->
+                    <div id="chatEmpty" class="empty-state">
+                        <h1 class="empty-title">施工安全规范问答</h1>
+                        <p class="empty-sub">基于 RAG 的规范检索助手，回答只依据知识库原文，并附引用出处。</p>
+                        <div class="example-chips">
+                            <button class="chip" onclick="askExample('安全帽佩戴有什么要求？')">安全帽佩戴有什么要求？</button>
+                            <button class="chip" onclick="askExample('脚手架搭设有哪些规范？')">脚手架搭设有哪些规范？</button>
+                            <button class="chip" onclick="askExample('高处作业如何防护？')">高处作业如何防护？</button>
+                            <button class="chip" onclick="askExample('施工现场临时用电有什么要求？')">施工现场临时用电有什么要求？</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 底部悬浮输入区 -->
+            <div class="composer-wrap">
+                <div class="chat-col">
+                    <div class="toolbar">
+                        <label class="toolbar-item">召回
+                            <select id="topkSelect">
+                                <option value="3">3 条</option>
+                                <option value="5" selected>5 条</option>
+                                <option value="8">8 条</option>
+                                <option value="10">10 条</option>
+                            </select>
+                        </label>
+                        <span id="modeHint" class="mode-hint"></span>
+                    </div>
+                    <div class="composer-box">
+                        <textarea id="questionInput" rows="2" placeholder="向安全规范提问…"></textarea>
+                        <button id="sendBtn" class="send-btn" onclick="sendQuestion()" title="发送">
+                            <svg id="sendIcon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg>
+                            <svg id="stopIcon" class="hidden" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
+                        </button>
+                    </div>
+                    <p class="composer-hint">无召回时系统会明确提示「未找到相关规范」，不会编造答案。Enter 发送，Shift+Enter 换行。</p>
+                </div>
+            </div>
+        </section>
+
+        <!-- ============ 菜单二：知识库 ============ -->
+        <section id="viewKb" class="view hidden">
+            <div class="kb-scroll">
+                <div class="kb-col">
+                    <div class="kb-head">
+                        <h2>知识库管理</h2>
+                        <div class="kb-head-actions">
+                            <span id="reindexTip" class="tip"></span>
+                            <button class="btn-primary" id="reindexBtn" onclick="reindex()">重建索引</button>
+                        </div>
+                    </div>
+
+                    <!-- 索引统计卡片（字段来自 /api/kb/stats） -->
+                    <div class="stats-grid">
+                        <div class="stat-card"><div class="stat-num" id="statDocs">-</div><div class="stat-label">文档总数</div></div>
+                        <div class="stat-card"><div class="stat-num" id="statChunks">-</div><div class="stat-label">文本块总数</div></div>
+                        <div class="stat-card"><div class="stat-num" id="statDim">-</div><div class="stat-label">向量维度 · <span id="statStore">-</span></div></div>
+                        <div class="stat-card"><div class="stat-num small" id="statModel">-</div><div class="stat-label">Embedding 模型</div></div>
+                    </div>
+
+                    <!-- 导入内容：拖拽 / 文件夹 / 直接粘贴 -->
+                    <div class="panel">
+                        <h3>导入内容</h3>
+                        <div id="dropZone" class="drop-zone">
+                            <svg class="drop-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+                            <div class="drop-text">把 PDF / Word / TXT 拖到这里，或点击选择（可多选、可选整个文件夹）</div>
+                            <div id="fileName" class="drop-file"></div>
+                            <input type="file" id="fileInput" class="hidden" multiple
+                                   accept=".pdf,.doc,.docx,.wps,.txt,.md,.markdown,.ppt,.pptx,.xls,.xlsx,.html,.htm">
+                            <input type="file" id="dirInput" class="hidden" webkitdirectory directory multiple>
+                        </div>
+                        <div class="upload-actions">
+                            <button class="btn-primary" onclick="startUpload()">确认入库</button>
+                            <button class="btn-ghost" onclick="document.getElementById('dirInput').click()">选择文件夹</button>
+                            <span id="uploadTip" class="tip"></span>
+                        </div>
+
+                        <div class="import-sep"><span>或者，直接粘贴条文</span></div>
+                        <div class="paste-box">
+                            <input type="text" id="pasteTitle" class="paste-title"
+                                   placeholder="标题（可选）：会成为文档名，例如 JGJ80-2016 第6章 攀登作业">
+                            <textarea id="pasteText" class="paste-area" rows="4"
+                                      placeholder="把条文粘贴到这里（Ctrl+V）。从微信、Word、网页复制的文字都可以，不用先存成文件…"></textarea>
+                            <div class="upload-actions">
+                                <button class="btn-primary" onclick="startPaste()">粘贴并入库</button>
+                                <span id="pasteMeta" class="tip"></span>
+                            </div>
+                        </div>
+
+                        <div id="uploadList" class="upload-list"></div>
+                        <p class="hint">选完文件会先做一次预检：预计切多少块、能否定位到条款号、是否与库里已有文档重复，确认无误后再入库。粘贴的文本会存成 txt 一起参与重建索引。</p>
+                    </div>
+
+                    <!-- 文档列表 -->
+                    <div class="panel">
+                        <h3>文档列表</h3>
+                        <table class="doc-table">
+                            <thead>
+                            <tr><th>文件名</th><th>大小</th><th>切分块数</th><th>入库时间</th><th>状态</th><th>操作</th></tr>
+                            </thead>
+                            <tbody id="docTableBody">
+                            <tr><td colspan="6" class="empty">加载中…</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <!-- 检索测试 -->
+                    <div class="panel">
+                        <h3>检索测试（答辩演示）</h3>
+                        <div class="search-row">
+                            <input type="text" id="searchInput" placeholder="输入问题，只看召回结果，不生成回答">
+                            <button class="btn-primary" onclick="searchTest()">测试召回</button>
+                        </div>
+                        <div id="searchResults"></div>
+                    </div>
+                </div>
+            </div>
+        </section>
+    </main>
+</div>
+<script src="app.js"></script>
+</body>
+</html>
