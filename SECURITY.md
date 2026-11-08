@@ -54,8 +54,8 @@ LLM_API_KEY=sk-你的key;APP_DEMO_MODE=false
 **方式 3：命令行启动**
 
 ```bash
-java -jar target/safety-rag-qa-*.jar \
-  --LLM_API_KEY="sk-你的key" \
+java -jar target/safety-rag-qa-1.0.0.jar \
+  --spring.ai.openai.api-key="sk-你的key" \
   --app.demo-mode=false
 ```
 
@@ -90,7 +90,7 @@ export APP_DEMO_MODE=false
 mvn -q package -DskipTests
 
 # 3) 启动（默认 8080）
-java -jar target/safety-rag-qa-0.0.1-SNAPSHOT.jar
+java -jar target/safety-rag-qa-1.0.0.jar
 
 # 浏览器打开 http://localhost:8080
 ```
