@@ -314,7 +314,7 @@ SSE 流式事件序列：`rewrite`（多轮改写结果）→ 一串 `token`（�
    POST（服务端立刻回 401，不需要 API key），谁能快速回应就选谁，写进 `hosts`；
    启动时加 `-Djdk.net.hosts.file=<项目>/hosts`，JVM 就只认这个 IP。
    只影响本进程，不动系统 hosts 表，也不影响浏览器和 curl。
-   `restart.sh` 会自动带上这个参数，换网络后重新选路用 `PIN_IP=1 bash restart.sh`。
+   用 `PIN_IP=1 bash restart.sh` 会先重新探测再带这个参数启动（默认不启用，见下方说明）。
 2. **把 HTTP 客户端统一到 JDK 的 `java.net.http.HttpClient`**（顺手做的一致性改动）：
    非流式用 `spring.http.client.factory: jdk`，流式在 `config/HttpClientConfig.java`
    里用 `WebClientCustomizer` + `JdkClientHttpConnector` 换传输层。它不影响能不能通，
@@ -334,6 +334,14 @@ SSE 流式事件序列：`rewrite`（多轮改写结果）→ 一串 `token`（�
 
 > 如果你把项目拷到别的机器上，那边网络没有 PMTU 问题，`hosts` 文件可以直接删掉，
 > 或者跑一次 `python tools/pin_dashscope_ip.py` 重新选路。
+
+> **⚠️ `hosts` 绕行本身也可能反噬（本项目后来实测踩到）**：网络环境变了之后（PMTU 黑洞消失），
+> 那个被固定下来的 IP 对 JVM 的 HTTPS 连接反而会触发 `Connection reset`，表现和原来一模一样——
+> 回答一直降级成【抽取式】，而 `curl` 直连百炼却正常（401 秒回）。根因是固定 IP 失效/不再友好，
+> 但 `-Djdk.net.hosts.file` 还在强制走它。**排查口诀**：模型调用 reset 时，先 `curl` 直连百炼
+> 区分"网络问题"还是"固定 IP 问题"；若 curl 通、JVM 不通，去掉 `restart.sh` 里的
+> `-Djdk.net.hosts.file` 参数（或删掉 `hosts` 文件）再试。结论：**换网络后优先验证是否还需要
+> hosts 绕行，不需要就直接删，别让一个过期的绕行方案反过来拖垮链路。**
 
 ## 写操作互斥与失败处理
 
@@ -434,6 +442,7 @@ bash restart.sh              # 默认端口 18080
 PORT=8080 bash restart.sh    # 换端口
 SKIP_BUILD=1 bash restart.sh # 只重启不打包
 NO_TEST=0 bash restart.sh    # 打包时顺带跑全量测试
+PIN_IP=1 bash restart.sh     # 先探测并固定百炼接入 IP 再启动（见下方说明）
 CHROMA_HOST=http://192.168.1.20 bash restart.sh   # Chroma 不在本机时
 ```
 
@@ -443,6 +452,11 @@ CHROMA_HOST=http://192.168.1.20 bash restart.sh   # Chroma 不在本机时
 
 Chroma 地址按「`CHROMA_HOST` 环境变量 → 项目根 `.chroma-host` 文件 → `http://localhost:8000`」
 的顺序取；`.chroma-host` 已在 `.gitignore` 里，适合放本机常用的虚拟机地址，免得每次都带参数。
+
+> **关于 `PIN_IP`（固定百炼 IP）**：默认**不**固定，走 DNS 轮询。只有当你又遇到
+> "模型调用 ~19 秒后 `Connection reset`、回答降级成抽取式"时，才用 `PIN_IP=1 bash restart.sh`
+> 重新探测并固定一个能通大包的 IP。原因是这个绕行只对「确实存在 PMTU 黑洞」的网络有效，
+> 网络环境变了之后固定下来的 IP 可能反而失效（本项目实测踩到过），所以宁可默认关闭、需要时显式打开。
 
 ### 向量库（Chroma）怎么起
 

@@ -101,12 +101,19 @@ start() {
     fi
     # 百炼有 4 个 A 记录，本机网络对其中的 IP 存在 PMTU 黑洞（上行大包被丢，
     # 19 秒后连接被重置 → 回答降级成抽取式）。hosts 由 tools/pin_dashscope_ip.py
-    # 探测生成，这里让 JVM 只认那个能通大包的 IP；只影响本进程，不动系统 hosts。
-    if [ -f "$HOSTS_FILE" ]; then
+    # 探测生成，让 JVM 只认那个能通大包的 IP；只影响本进程，不动系统 hosts。
+    #
+    # 但注意：这个绕行只在「确实存在 PMTU 黑洞」时才有用，网络环境变了之后
+    # 固定下来的 IP 可能反而失效，导致同样的 Connection reset（本项目实测踩到：
+    # curl 直连百炼通、JVM 带固定 IP 却 reset）。所以默认**不**启用，只有
+    # 显式 PIN_IP=1 时才带参数（此时会先重新探测再启动）。
+    if [ "${PIN_IP:-0}" = "1" ] && [ -f "$HOSTS_FILE" ]; then
         extra+=("-Djdk.net.hosts.file=$HOSTS_FILE")
         say "固定百炼接入 IP：$(grep -v '^#' "$HOSTS_FILE" | head -1)"
+    elif [ "${PIN_IP:-0}" = "1" ]; then
+        say "PIN_IP=1 但未找到 hosts，跳过固定 IP"
     else
-        say "未找到 hosts（可选）：如需固定百炼 IP，先跑 python tools/pin_dashscope_ip.py"
+        say "未固定百炼 IP（默认走 DNS 轮询；若又出现 19 秒重置，用 PIN_IP=1 bash restart.sh）"
     fi
 
     say "启动服务：http://localhost:$PORT/（向量库 Chroma：$CHROMA_HOST）"
