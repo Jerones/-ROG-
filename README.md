@@ -1,11 +1,45 @@
 # 基于 RAG 的施工安全规范智能问答系统
 
+<div align="center">
+
+![JDK](https://img.shields.io/badge/JDK-21-007396?logo=openjdk&logoColor=white)
+![Spring Boot](https://img.shields.io/badge/Spring%20Boot-3.4.5-6DB33F?logo=springboot&logoColor=white)
+![Spring AI](https://img.shields.io/badge/Spring%20AI-1.0.0-6DB33F?logo=spring&logoColor=white)
+![Chroma](https://img.shields.io/badge/Chroma-0.5.23-0D0D0D?logo=chroma&logoColor=white)
+![Maven](https://img.shields.io/badge/Maven-3.9.12-C71A36?logo=apachemaven&logoColor=white)
+![License](https://img.shields.io/badge/License-MIT-4C9F38?logo=opensourceinitiative&logoColor=white)
+
+**本地知识库 · 引用可溯源 · 无召回不编造**
+
+</div>
+
 > **公开发布版**：仓库中不含真实 API Key、本机 hosts、上传的规范原文与向量库数据。
 > 克隆后请先按 [SECURITY.md](SECURITY.md) 配置 `LLM_API_KEY`，并起一个 Chroma（`docker compose up -d`）再运行。
 
 面向施工现场安全管理场景的本地知识库问答：把施工安全规范（国家标准、行业标准）切分入库，
 提问时先检索相关条款、再基于条款生成回答，每条结论都能追溯到「哪份文件、第几条、第几页」的原文。
 回答只依据检索到的条款，不依赖模型自身记忆；检索不到就明确拒答，而不是硬编一段像模像样的答案。
+
+<!--
+  截图占位：建议在此放两张图，用相对路径引用 docs/ 目录下的图片（当前仓库暂无图片）。
+  例：
+  ![对话页](docs/screenshots/chat.png)
+  ![知识库页](docs/screenshots/knowledge-base.png)
+  截图建议：对话页（含引用卡片 + 多轮追问标注）、知识库页（含评测面板）。
+-->
+
+## 目录
+
+- [功能概览](#功能概览)
+- [快速开始](#快速开始)
+- [技术栈](#技术栈)
+- [架构与 RAG 链路](#架构与-rag-链路)
+- [API 接口清单](#api-接口清单)
+- [配置说明](#配置说明applicationyml-关键项)
+- [数据目录](#数据目录)
+- [测试](#测试)
+- [常见问题](#常见问题)
+- [可选的对照实验](#可选的对照实验)
 
 ## 功能概览
 
@@ -44,6 +78,31 @@
   评测集可用 `data/eval-set.json` 覆盖而不必重新打包；
 - **引用可定位到条款**：入库时解析 `第X条` / `3.2.1` / `附录A` 三类编号，引用卡片显示
   "《JGJ80-2016》4.1.1 · 第 47 页"，而不是笼统的"正文片段"。
+
+## 快速开始
+
+三分钟跑起来，最少只要一个可用的 Chroma 和一条 OpenAI 兼容接口的 API Key。
+
+```bash
+# 1. 起向量库（本机装 Docker 时一条命令搞定）
+docker compose up -d
+
+# 2. 配密钥（OpenAI 兼容接口，通义 / Kiwi / 本地 vLLM 都行）
+export LLM_API_KEY=sk-xxxxxxxx
+
+# 3. 启动（JDK 21 + Maven 3.9.12）
+mvn spring-boot:run
+
+# 4. 打开浏览器
+open http://localhost:8080   # 首次启动自动导入 sample_docs/ 示例规范，直接就能问
+```
+
+Chroma 不在本机时：`export CHROMA_HOST=http://<ip>`。没有 key 想看效果：加 `APP_DEMO_MODE=true`
+切到离线演示模式（见文末[「演示模式说明」](#演示模式说明无-api-key-时)）。完整的 IDEA 启动与
+`restart.sh` 用法见[「运行步骤」](#运行步骤intellij-idea)。
+
+> 向量库是必要依赖，**连不上会直接启动失败**（不会静默降级）。起来后建议先花 1 分钟自检：
+> `python tools/chroma_selfcheck.py --url http://localhost:8000`。
 
 ## 技术栈
 
@@ -116,7 +175,41 @@
 | `service/IngestPreviewService.java` | 入库预检：解析切分但不写库，算块数/条款率/重复/版本冲突 |
 | `util/StandardCode.java` | 从文件名抽标准编号（`JGJ 80-2016`），用于新旧版本提醒 |
 
-## 入库链路：从"一次请求"到"后台作业"
+## API 接口清单
+
+### 对话
+
+| 接口 | 说明 |
+|---|---|
+| `POST /api/chat` | 同步问答，一次返回完整回答 + 引用列表 |
+| `POST /api/chat/stream` | 流式问答（SSE），事件序列见下 |
+
+两个接口共用同一请求体（`Content-Type: application/json`）：
+
+```json
+{
+  "question": "安全帽的颜色有什么要求？",
+  "topK": 5,
+  "history": [
+    { "role": "user", "content": "安全帽有哪些要求？" },
+    { "role": "assistant", "content": "……" }
+  ],
+  "docIds": ["JGJ80-2016__xxx"]
+}
+```
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `question` | string | 本轮问题（必填） |
+| `topK` | int | 召回条数，不传默认 5，后端限幅 1~20 |
+| `history` | `Turn[]` | 最近若干轮对话，按时间正序（旧→新），为空表示单轮。只用于「追问改写」（把"那颜色呢"补全成可独立检索的问句），**不参与**最终 Prompt 的上下文拼接 |
+| `docIds` | string[] | 限定检索范围的文档 docId 列表，为空/不传 = 全库检索 |
+
+`history` 里的 `Turn`：`{ "role": "user" | "assistant", "content": "……" }`。
+
+SSE 流式事件序列：`rewrite`（多轮改写结果）→ 一串 `token`（逐段回答）→ `citations`（引用列表）→ `done`。
+
+### 知识库（入库 / 管理）
 
 | 接口 | 用途 |
 |---|---|
@@ -125,6 +218,12 @@
 | `POST /api/kb/documents`（字段 `file`） | 单文件同步入库，兼容脚本/命令行调用 |
 | `POST /api/kb/uploads`（字段 `files`，可重复） | 批量上传：**只落盘**，立刻返回 `jobId` 与每文件初始状态 |
 | `GET /api/kb/uploads/{jobId}` | 轮询进度：`stage`（排队中/解析切分/向量化/已完成/失败）、`written`/`total`（块数）、`message`（失败原因） |
+| `GET /api/kb/documents` | 文档列表（文件名、大小、块数、入库时间、状态） |
+| `DELETE /api/kb/documents/{docId}` | 删除单篇文档（同时清掉向量） |
+| `POST /api/kb/reindex` | 一键按 `data/docs/` 原文件全量重建索引 |
+| `GET /api/kb/stats` | 索引统计：文档总数、块总数、向量维度、Embedding 模型、向量库实现 |
+| `POST /api/kb/search-test`（JSON `{query, topK}`） | 检索测试：只看召回片段与分数，不生成回答 |
+| `POST /api/kb/eval`（JSON `{topK}`） | 跑内置评测集，返回纯向量/混合两模式的 Hit@1 / Hit@K / MRR / 拒答率 |
 | `GET /api/kb/documents/{docId}/chunks?q=&offset=&limit=` | 查看某篇文档入库后的块原文：
 `total` 是全文块数、`matched` 是关键字过滤后的条数；`q` 同时匹配块正文与条款号 |
 
