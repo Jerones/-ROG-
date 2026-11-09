@@ -20,13 +20,13 @@
 提问时先检索相关条款、再基于条款生成回答，每条结论都能追溯到「哪份文件、第几条、第几页」的原文。
 回答只依据检索到的条款，不依赖模型自身记忆；检索不到就明确拒答，而不是硬编一段像模像样的答案。
 
-<!--
-  截图占位：建议在此放两张图，用相对路径引用 docs/ 目录下的图片（当前仓库暂无图片）。
-  例：
-  ![对话页](docs/screenshots/chat.png)
-  ![知识库页](docs/screenshots/knowledge-base.png)
-  截图建议：对话页（含引用卡片 + 多轮追问标注）、知识库页（含评测面板）。
--->
+<div align="center">
+
+| 对话页 | 知识库页 |
+|---|---|
+| ![对话页](docs/screenshots/chat.png) | ![知识库页](docs/screenshots/knowledge-base.png) |
+
+</div>
 
 ## 目录
 
