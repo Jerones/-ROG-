@@ -3,6 +3,7 @@ package com.example.safetyrag.web;
 import com.example.safetyrag.service.IngestJobService;
 import com.example.safetyrag.service.IngestPreviewService;
 import com.example.safetyrag.service.KnowledgeBaseService;
+import com.example.safetyrag.web.dto.ChunkPageDto;
 import com.example.safetyrag.web.dto.DocumentDto;
 import com.example.safetyrag.web.dto.PasteRequest;
 import com.example.safetyrag.web.dto.PreviewDto;
@@ -32,6 +33,7 @@ import java.util.Map;
  *
  * <ul>
  *   <li>GET    /api/kb/documents            文档列表</li>
+ *   <li>GET    /api/kb/documents/{docId}/chunks  查看某篇文档的块原文（支持关键字 + 分页）</li>
  *   <li>POST   /api/kb/preview              入库预检：解析但不写库，返回块数/条款率/重复/版本提示</li>
  *   <li>POST   /api/kb/uploads              批量上传（字段名 files，异步入库，立刻返回 jobId）</li>
  *   <li>GET    /api/kb/uploads/{jobId}      查询批量任务进度</li>
@@ -62,6 +64,23 @@ public class KnowledgeBaseController {
     @GetMapping("/documents")
     public List<DocumentDto> listDocuments() {
         return knowledgeBaseService.listDocuments();
+    }
+
+    /**
+     * 查看某篇文档入库后的块原文（页面上的"查看"按钮）。
+     *
+     * <p>{@code q} 为关键字，命中的是"块正文或条款号"，前端每敲一次就查一次，
+     * 因此这里不缓存也不做模糊匹配——上千块时 {@code contains} 的耗时可以忽略。</p>
+     */
+    @GetMapping("/documents/{docId}/chunks")
+    public ChunkPageDto chunks(@PathVariable("docId") String docId,
+                               @RequestParam(value = "q", required = false) String q,
+                               @RequestParam(value = "offset", defaultValue = "0") int offset,
+                               @RequestParam(value = "limit", defaultValue = "50") int limit) {
+        int safeLimit = Math.max(1, Math.min(limit, 200));
+        return knowledgeBaseService.chunks(docId, q, Math.max(0, offset), safeLimit)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND,
+                        "文档不存在：" + docId));
     }
 
     @PostMapping("/documents")

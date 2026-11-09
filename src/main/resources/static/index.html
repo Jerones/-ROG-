@@ -33,7 +33,7 @@
             <div class="side-card-row"><span>文档</span><b id="sideStatDocs">-</b></div>
             <div class="side-card-row"><span>文本块</span><b id="sideStatChunks">-</b></div>
         </div>
-        <div class="sidebar-foot">Spring AI · VectorStore<br>默认 SimpleVectorStore</div>
+        <div class="sidebar-foot">Spring AI · Chroma 向量库<br><span id="storeFoot">向量检索 + BM25 混合召回</span></div>
     </aside>
 
     <main class="main">
@@ -149,7 +149,7 @@
 
                     <!-- 检索测试 -->
                     <div class="panel">
-                        <h3>检索测试（答辩演示）</h3>
+                        <h3>检索测试（只召回，不生成）</h3>
                         <div class="search-row">
                             <input type="text" id="searchInput" placeholder="输入问题，只看召回结果，不生成回答">
                             <button class="btn-primary" onclick="searchTest()">测试召回</button>
@@ -161,6 +161,32 @@
         </section>
     </main>
 </div>
+
+<!-- ============ 弹层：查看某篇文档入库后的块原文 ============ -->
+<div id="chunkModal" class="modal hidden">
+    <div class="modal-mask" onclick="closeChunks()"></div>
+    <div class="modal-panel" role="dialog" aria-modal="true">
+        <div class="modal-head">
+            <div class="modal-title-wrap">
+                <div id="chunkDocName" class="modal-title">-</div>
+                <div id="chunkMeta" class="modal-sub">-</div>
+            </div>
+            <button class="modal-close" onclick="closeChunks()" title="关闭（Esc）">×</button>
+        </div>
+        <div class="modal-toolbar">
+            <input type="text" id="chunkSearch" class="modal-search"
+                   placeholder="在这篇文档里搜关键字或条款号，例如 3.13.3（留空看全部）">
+            <span id="chunkSearchTip" class="tip"></span>
+        </div>
+        <div id="chunkList" class="chunk-list"></div>
+        <div class="modal-foot">
+            <button class="btn-ghost" id="chunkPrev" onclick="chunkPage(-1)">上一页</button>
+            <span id="chunkPager" class="tip">-</span>
+            <button class="btn-ghost" id="chunkNext" onclick="chunkPage(1)">下一页</button>
+        </div>
+    </div>
+</div>
+
 <script src="app.js"></script>
 </body>
 </html>

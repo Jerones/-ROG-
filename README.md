@@ -27,6 +27,8 @@
 - 多个文件排队逐个入库，**每个文件独立进度条**（解析 → 向量化 x/y 块 → 完成），单个文件失败不影响其他文件；
 - 重建索引：一键按 `data/docs/` 中的原文件全量重建；
 - 索引统计：文档总数、块总数、向量维度、当前 Embedding 模型、向量库实现；
+- **入库内容可直接查看**：点文档名打开弹层，按块看原文、条款号、页码与字数，
+  支持在这篇文档内按关键字或条款号（如 `3.13.3`）过滤，命中处高亮；
 - **检索测试**小工具：输入问题只看召回片段和分数，不生成回答（不消耗生成调用，便于调参对照）。
 - **引用可定位到条款**：入库时解析 `第X条` / `3.2.1` / `附录A` 三类编号，引用卡片显示
   "《JGJ80-2016》4.1.1 · 第 47 页"，而不是笼统的"正文片段"。
@@ -95,7 +97,7 @@
 | `tools/pin_dashscope_ip.py` | 逐个探测百炼的 A 记录，挑出"上行大包能通"的 IP 写入 `hosts`，绕开 PMTU 黑洞 |
 | `tools/chroma_selfcheck.py` | Chroma 服务端自检：模拟 600 块分批写入，判断这台机器的 Chroma 扛不扛得住（只用标准库） |
 | `web/ChatController.java` | `/api/chat`、`/api/chat/stream`（SSE：token 事件 + citations 事件） |
-| `web/KnowledgeBaseController.java` | `/api/kb/documents`、`/api/kb/preview`（入库预检）、`/api/kb/uploads`（批量上传 + 进度查询）、`/api/kb/paste`（粘贴入库）、`/api/kb/reindex`、`/api/kb/stats`、`/api/kb/search-test` |
+| `web/KnowledgeBaseController.java` | `/api/kb/documents`、`/api/kb/preview`（入库预检）、`/api/kb/uploads`（批量上传 + 进度查询）、`/api/kb/paste`（粘贴入库）、`/api/kb/reindex`、`/api/kb/stats`、`/api/kb/search-test`、`/api/kb/documents/{docId}/chunks`（块原文，支持过滤与分页） |
 | `web/ApiExceptionHandler.java` | 全局异常映射：400/404/409/413/500 与一句可读文案，替代"一律 500 + 堆栈" |
 | `service/IngestPreviewService.java` | 入库预检：解析切分但不写库，算块数/条款率/重复/版本冲突 |
 | `util/StandardCode.java` | 从文件名抽标准编号（`JGJ 80-2016`），用于新旧版本提醒 |
@@ -109,6 +111,8 @@
 | `POST /api/kb/documents`（字段 `file`） | 单文件同步入库，兼容脚本/命令行调用 |
 | `POST /api/kb/uploads`（字段 `files`，可重复） | 批量上传：**只落盘**，立刻返回 `jobId` 与每文件初始状态 |
 | `GET /api/kb/uploads/{jobId}` | 轮询进度：`stage`（排队中/解析切分/向量化/已完成/失败）、`written`/`total`（块数）、`message`（失败原因） |
+| `GET /api/kb/documents/{docId}/chunks?q=&offset=&limit=` | 查看某篇文档入库后的块原文：
+`total` 是全文块数、`matched` 是关键字过滤后的条数；`q` 同时匹配块正文与条款号 |
 
 设计取舍：
 

@@ -196,6 +196,7 @@ async function loadStats() {
         $('sideStatChunks').textContent = s.chunkCount;
         $('demoBadge').classList.toggle('hidden', !s.demoMode);
         $('modeHint').textContent = (s.demoMode ? '演示模式' : '真实模型') + ' · ' + s.vectorStore;
+        $('storeFoot').textContent = String(s.vectorStore).replace(/VectorStore$/, '') + ' · ' + (s.vectorDimension > 0 ? s.vectorDimension + ' 维' : '—');
     } catch (e) { /* 统计加载失败不阻塞页面 */ }
 }
 
@@ -211,12 +212,22 @@ async function loadDocuments() {
         for (const d of docs) {
             const tr = document.createElement('tr');
             tr.innerHTML =
-                '<td>' + escapeHtml(d.docName) + '</td>' +
-                '<td>' + formatSize(d.fileSize) + '</td>' +
-                '<td>' + d.chunkCount + '</td>' +
-                '<td>' + formatTime(d.ingestedAt) + '</td>' +
-                '<td>' + escapeHtml(d.status) + '</td>' +
-                '<td><button class="btn-danger" onclick="deleteDoc(\'' + d.docId + '\')">删除</button></td>';
+                '<td class="doc-name-cell">' +
+                '  <button class="doc-name-link" data-act="view" title="查看入库后的块原文">' +
+                escapeHtml(d.docName) + '</button>' +
+                '</td>' +
+                '<td class="nowrap">' + formatSize(d.fileSize) + '</td>' +
+                '<td class="nowrap">' + d.chunkCount + '</td>' +
+                '<td class="nowrap">' + formatTime(d.ingestedAt) + '</td>' +
+                '<td class="nowrap">' + escapeHtml(d.status) + '</td>' +
+                '<td class="doc-actions">' +
+                '  <button class="btn-view" data-act="view">查看</button>' +
+                '  <button class="btn-danger" data-act="del">删除</button>' +
+                '</td>';
+            tr.querySelectorAll('[data-act="view"]').forEach((btn) => {
+                btn.onclick = () => openChunks(d.docId, d.docName);
+            });
+            tr.querySelector('[data-act="del"]').onclick = () => deleteDoc(d.docId);
             tbody.appendChild(tr);
         }
     } catch (e) {
@@ -551,6 +562,139 @@ async function deleteDoc(docId) {
     if (resp.ok) { loadStats(); loadDocuments(); }
     else alert('删除失败');
 }
+
+// ---------- 查看入库内容：某篇文档的块原文（弹层 + 关键字过滤 + 分页） ----------
+const CHUNK_PAGE_SIZE = 20;
+/** 弹层状态；seq 用于丢弃"打字太快导致的乱序响应" */
+const chunkState = { docId: null, docName: '', offset: 0, matched: 0, total: 0, query: '', seq: 0 };
+let chunkSearchTimer = null;
+
+function openChunks(docId, docName) {
+    chunkState.docId = docId;
+    chunkState.docName = docName;
+    chunkState.offset = 0;
+    chunkState.query = '';
+    $('chunkSearch').value = '';
+    $('chunkDocName').textContent = docName || docId;
+    $('chunkMeta').textContent = '加载中…';
+    $('chunkList').innerHTML = '<p class="hint">正在读取块原文…</p>';
+    $('chunkModal').classList.remove('hidden');
+    document.body.classList.add('modal-open');
+    loadChunks();
+}
+
+function closeChunks() {
+    $('chunkModal').classList.add('hidden');
+    document.body.classList.remove('modal-open');
+    chunkState.docId = null;
+}
+
+/** 切换页码：dir = -1 / 1 */
+function chunkPage(dir) {
+    const next = chunkState.offset + dir * CHUNK_PAGE_SIZE;
+    if (next < 0 || next >= chunkState.matched) return;
+    chunkState.offset = next;
+    loadChunks();
+}
+
+async function loadChunks() {
+    if (!chunkState.docId) return;
+    const seq = ++chunkState.seq;
+    $('chunkList').classList.add('loading');
+    try {
+        // 关键字过滤放在后端：一篇规范可能上千块，全量下发会让首屏 JSON 到几 MB
+        const url = '/api/kb/documents/' + encodeURIComponent(chunkState.docId) + '/chunks'
+            + '?offset=' + chunkState.offset
+            + '&limit=' + CHUNK_PAGE_SIZE
+            + '&q=' + encodeURIComponent(chunkState.query);
+        const resp = await fetch(url);
+        if (!resp.ok) {
+            const err = await resp.json().catch(() => ({}));
+            throw new Error(err.message || ('HTTP ' + resp.status));
+        }
+        const data = await resp.json();
+        if (seq !== chunkState.seq) return; // 已经有更新的请求了，丢弃这次结果
+        chunkState.matched = data.matched;
+        chunkState.total = data.total;
+        chunkState.offset = data.offset;
+        renderChunks(data);
+    } catch (e) {
+        if (seq !== chunkState.seq) return;
+        $('chunkList').innerHTML = '<p class="hint">读取失败：' + escapeHtml(e.message) + '</p>';
+        $('chunkMeta').textContent = '读取失败';
+    } finally {
+        if (seq === chunkState.seq) $('chunkList').classList.remove('loading');
+    }
+}
+
+function renderChunks(data) {
+    const box = $('chunkList');
+    const kw = chunkState.query.trim();
+    $('chunkMeta').textContent = kw
+        ? '共 ' + data.total + ' 块，命中 ' + data.matched + ' 块（关键字「' + kw + '」）'
+        : '共 ' + data.total + ' 块';
+
+    if (!data.chunks || data.chunks.length === 0) {
+        box.innerHTML = '<p class="hint">' + (kw ? '没有匹配的块，换个关键字试试。' : '这篇文档没有块。') + '</p>';
+        renderPager();
+        return;
+    }
+
+    box.innerHTML = '';
+    for (const c of data.chunks) {
+        const pageText = (c.page !== null && c.page !== undefined) ? '第 ' + c.page + ' 页 · ' : '';
+        const card = document.createElement('div');
+        card.className = 'chunk-card';
+        card.innerHTML =
+            '<div class="chunk-head">' +
+            '  <span class="chunk-clause">' + escapeHtml(c.clause) + '</span>' +
+            '  <span class="chunk-meta">第 ' + (c.chunkIndex + 1) + ' 块 · ' + pageText + c.chars + ' 字</span>' +
+            '</div>' +
+            '<div class="chunk-text">' + highlight(c.text, kw) + '</div>';
+        box.appendChild(card);
+    }
+    renderPager();
+    $('chunkList').scrollTop = 0;
+}
+
+function renderPager() {
+    const from = chunkState.matched === 0 ? 0 : chunkState.offset + 1;
+    const to = Math.min(chunkState.offset + CHUNK_PAGE_SIZE, chunkState.matched);
+    $('chunkPager').textContent = chunkState.matched === 0
+        ? '无结果' : (from + '–' + to + ' / ' + chunkState.matched + ' 块');
+    $('chunkPrev').disabled = chunkState.offset <= 0;
+    $('chunkNext').disabled = chunkState.offset + CHUNK_PAGE_SIZE >= chunkState.matched;
+}
+
+/** 把关键字包成 <mark>：先转义再替换，避免正文里的尖括号被当成标签 */
+function highlight(text, kw) {
+    const safe = escapeHtml(text);
+    if (!kw) return safe;
+    const needle = escapeHtml(kw);
+    // 关键字里可能有正则元字符，用 split/join 做纯文本替换最稳
+    return safe.split(needle).join('<mark>' + needle + '</mark>');
+}
+
+$('chunkSearch').addEventListener('input', () => {
+    clearTimeout(chunkSearchTimer);
+    // 每敲一个字就发请求会把彼此挤掉，250ms 停顿后才查
+    chunkSearchTimer = setTimeout(() => {
+        chunkState.query = $('chunkSearch').value;
+        chunkState.offset = 0;
+        loadChunks();
+    }, 250);
+});
+$('chunkSearch').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+        clearTimeout(chunkSearchTimer);
+        chunkState.query = $('chunkSearch').value;
+        chunkState.offset = 0;
+        loadChunks();
+    }
+});
+document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && !$('chunkModal').classList.contains('hidden')) closeChunks();
+});
 
 async function reindex() {
     const btn = $('reindexBtn');

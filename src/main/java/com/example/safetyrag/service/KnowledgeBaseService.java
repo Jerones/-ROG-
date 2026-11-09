@@ -6,6 +6,8 @@ import com.example.safetyrag.etl.DocumentIngestService;
 import com.example.safetyrag.rag.Bm25Index;
 import com.example.safetyrag.rag.HybridRetriever;
 import com.example.safetyrag.rag.RetrievedChunk;
+import com.example.safetyrag.web.dto.ChunkDto;
+import com.example.safetyrag.web.dto.ChunkPageDto;
 import com.example.safetyrag.web.dto.DocumentDto;
 import com.example.safetyrag.web.dto.SearchHitDto;
 import com.example.safetyrag.web.dto.StatsDto;
@@ -29,6 +31,7 @@ import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -137,6 +140,46 @@ public class KnowledgeBaseService {
                 .map(d -> new DocumentDto(d.docId(), d.docName(), d.fileSize(),
                         d.chunkCount(), d.ingestedAt(), d.status()))
                 .toList();
+    }
+
+    /**
+     * 查看某篇文档入库后的真实内容：按块返回原文，支持关键字过滤与分页。
+     *
+     * <p>数据直接读注册表（块原文本来就存了一份给它），<b>不查向量库</b>：
+     * 一是省一次跨网络往返，二是避免把"向量库里有、注册表里没有"的僵尸块展示出来——
+     * 那种块点进去也没有引用信息，反而让人以为入库脏了。</p>
+     *
+     * <p>关键字过滤在后端做，因为一篇规范可能有上千块，全量传给前端再筛会让
+     * 首屏 JSON 变成几 MB。过滤同时匹配块正文和条款号，方便按"3.13.3"直接定位。</p>
+     *
+     * @param offset  起始下标（负数按 0 处理，超出范围返回空页）
+     * @param limit   每页条数（调用方已限幅）
+     * @return 文档不存在时返回 {@link Optional#empty()}
+     */
+    public Optional<ChunkPageDto> chunks(String docId, String query, int offset, int limit) {
+        Optional<DocumentRegistry.DocRecord> doc = registry.listDocuments().stream()
+                .filter(d -> d.docId().equals(docId))
+                .findFirst();
+        if (doc.isEmpty()) {
+            return Optional.empty();
+        }
+        List<DocumentRegistry.ChunkRecord> all = registry.chunksOf(docId);
+        String kw = query == null ? "" : query.trim().toLowerCase(Locale.ROOT);
+        List<DocumentRegistry.ChunkRecord> hits = kw.isEmpty() ? all : all.stream()
+                .filter(c -> (c.text() != null && c.text().toLowerCase(Locale.ROOT).contains(kw))
+                        || (c.clause() != null && c.clause().toLowerCase(Locale.ROOT).contains(kw)))
+                .toList();
+
+        int from = Math.max(0, Math.min(offset, hits.size()));
+        int to = Math.min(hits.size(), from + limit);
+        List<ChunkDto> page = new ArrayList<>();
+        for (DocumentRegistry.ChunkRecord c : hits.subList(from, to)) {
+            String text = c.text() == null ? "" : c.text();
+            page.add(new ChunkDto(c.chunkId(), c.clause(), c.chunkIndex(), c.page(),
+                    text.length(), text));
+        }
+        return Optional.of(new ChunkPageDto(docId, doc.get().docName(), all.size(),
+                hits.size(), from, limit, page));
     }
 
     /** 入库进度回调：已写入块数 / 总块数。 */

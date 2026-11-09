@@ -147,7 +147,7 @@ input, textarea, select { font-family: inherit; }
 .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-bottom: 16px; }
 .stat-card { background: #fff; border: 1px solid #E5E7EB; border-radius: 14px; padding: 18px 16px; box-shadow: 0 1px 3px rgba(17,24,39,.04); }
 .stat-num { font-size: 26px; font-weight: 700; color: #4D6BFE; }
-.stat-num.small { font-size: 15px; word-break: break-all; line-height: 1.5; min-height: 30px; display: flex; align-items: center; }
+.stat-num.small { font-size: 15px; word-break: normal; overflow-wrap: anywhere; line-height: 1.5; min-height: 30px; display: flex; align-items: center; }
 .stat-label { font-size: 12px; color: #8A94A6; margin-top: 5px; }
 .panel { background: #fff; border: 1px solid #E5E7EB; border-radius: 14px; padding: 20px; margin-bottom: 16px; box-shadow: 0 1px 3px rgba(17,24,39,.04); }
 .panel h3 { margin-bottom: 14px; font-size: 16px; font-weight: 600; color: #111827; }
@@ -211,6 +211,14 @@ input, textarea, select { font-family: inherit; }
 .doc-table th { color: #8A94A6; font-weight: 500; font-size: 13px; }
 .doc-table tbody tr:hover { background: #F9FAFB; }
 .doc-table .empty { text-align: center; color: #A6AEC0; padding: 20px; }
+.doc-table .nowrap { white-space: nowrap; }
+/* 文件名当入口：点它就能看入库后的块原文，窄窗口下"操作"列被挤出屏幕时也点得到 */
+.doc-name-link {
+    background: none; border: none; padding: 0; text-align: left; cursor: pointer;
+    color: #1F2937; font-size: 14px; line-height: 1.5; word-break: break-word;
+    transition: color .15s;
+}
+.doc-name-link:hover { color: #4D6BFE; text-decoration: underline; }
 .search-row { display: flex; gap: 10px; }
 .search-row input {
     flex: 1; border: 1px solid #E5E7EB; border-radius: 10px; padding: 10px 13px;
@@ -224,3 +232,72 @@ input, textarea, select { font-family: inherit; }
 .hit-score-fill { height: 100%; background: #4D6BFE; border-radius: 999px; }
 .hit-score-num { color: #4D6BFE; font-weight: 600; font-size: 12px; }
 .hit-snippet { color: #4B5563; line-height: 1.7; font-size: 13px; }
+
+/* ---------- 弹层：查看入库内容 ---------- */
+.btn-view {
+    background: #fff; color: #4D6BFE; border: 1px solid #D6DEEF; border-radius: 8px;
+    padding: 0 12px; min-height: 30px; font-size: 13px; cursor: pointer;
+    transition: background .15s, border-color .15s;
+}
+.btn-view:hover { background: #F4F7FF; border-color: #4D6BFE; }
+.doc-actions { display: flex; gap: 8px; align-items: center; }
+.doc-name-cell { word-break: break-all; }
+
+body.modal-open { overflow: hidden; }
+.modal { position: fixed; inset: 0; z-index: 50; display: flex; align-items: center; justify-content: center; }
+.modal-mask { position: absolute; inset: 0; background: rgba(17, 24, 39, .38); }
+.modal-panel {
+    position: relative; width: min(860px, 92vw); max-height: 86vh;
+    display: flex; flex-direction: column;
+    background: #fff; border-radius: 16px; box-shadow: 0 24px 60px rgba(17, 24, 39, .22);
+    overflow: hidden;
+}
+.modal-head {
+    display: flex; align-items: flex-start; gap: 16px;
+    padding: 18px 20px 14px; border-bottom: 1px solid #F0F1F4;
+}
+.modal-title-wrap { flex: 1; min-width: 0; }
+.modal-title {
+    font-size: 16px; font-weight: 700; color: #111827;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.modal-sub { font-size: 12.5px; color: #8A94A6; margin-top: 5px; }
+.modal-close {
+    flex-shrink: 0; width: 30px; height: 30px; border: none; border-radius: 8px;
+    background: #F5F6F7; color: #6B7280; font-size: 20px; line-height: 1;
+    cursor: pointer; transition: background .15s, color .15s;
+}
+.modal-close:hover { background: #EBEDF0; color: #111827; }
+.modal-toolbar { display: flex; align-items: center; gap: 12px; padding: 12px 20px; border-bottom: 1px solid #F0F1F4; }
+.modal-search {
+    flex: 1; border: 1px solid #E5E7EB; border-radius: 10px;
+    padding: 9px 13px; font-size: 14px; color: #1F2937; outline: none;
+}
+.modal-search:focus { border-color: #4D6BFE; }
+.modal-toolbar .tip { flex-shrink: 0; font-size: 12px; color: #8A94A6; }
+
+.chunk-list {
+    flex: 1; overflow-y: auto; padding: 14px 20px;
+    display: flex; flex-direction: column; gap: 10px; background: #FBFCFE;
+}
+.chunk-list.loading { opacity: .55; }
+.chunk-card { background: #fff; border: 1px solid #E5E7EB; border-radius: 12px; padding: 12px 14px; }
+.chunk-head { display: flex; align-items: center; gap: 10px; margin-bottom: 7px; flex-wrap: wrap; }
+.chunk-clause {
+    font-size: 12px; font-weight: 700; color: #4D6BFE;
+    background: #EAF0FE; padding: 2px 9px; border-radius: 999px;
+}
+.chunk-meta { font-size: 12px; color: #A6AEC0; }
+.chunk-text {
+    font-size: 13.5px; color: #374151; line-height: 1.8;
+    white-space: pre-wrap; word-break: break-word;
+}
+.chunk-text mark { background: #FEF08A; color: inherit; padding: 0 1px; border-radius: 2px; }
+
+.modal-foot {
+    display: flex; align-items: center; justify-content: center; gap: 16px;
+    padding: 12px 20px; border-top: 1px solid #F0F1F4; background: #fff;
+}
+.modal-foot .btn-ghost { padding: 6px 16px; font-size: 13px; }
+.modal-foot .btn-ghost:disabled { color: #C2C9D6; border-color: #EDF0F6; cursor: not-allowed; background: #fff; }
+.modal-foot .tip { font-size: 12.5px; color: #6B7280; min-width: 130px; text-align: center; }
