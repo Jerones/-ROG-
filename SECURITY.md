@@ -12,7 +12,7 @@
 | **真实模型 API Key** | `src/main/resources/application.yml` → `spring.ai.openai.api-key` 的默认值 | 已替换为占位符 `sk-placeholder-set-LLM_API_KEY-in-env`，真实 key 只能通过环境变量 `LLM_API_KEY` 注入 |
 | **本机 hosts 文件** | 项目根目录 `hosts` | 不提交（已加入 `.gitignore`）。该文件由 `tools/pin_dashscope_ip.py` 按当前网络探活生成，换机器/换网络后应重新生成或直接删除 |
 | **上传的规范原文** | `data/docs/` | 不提交。里面是测试时上传的 GB 50656-2011、GB 50720-2011 等标准全文，版权归原发布单位，不适合随仓库分发 |
-| **向量库快照** | `data/simple-vector-store.json`（约 21 MB）、`data/registry.json` | 不提交。首次运行会自动重建 |
+| **运行时数据** | `data/registry.json`、`data/docs/`、`data/chroma-server/` | 不提交。克隆后上传自己的文档即可 |
 | **运行日志 / PID** | `.run.log`、`.run.pid` | 不提交 |
 | **IDE 工程文件** | `.idea/` | 不提交。其中 `workspace.xml` 记录了本机绝对路径 |
 | **构建产物** | `target/`（含 81 MB 胖 jar） | 不提交，用 `mvn package` 自行构建 |
@@ -89,13 +89,17 @@ export APP_DEMO_MODE=false
 # 2) 构建
 mvn -q package -DskipTests
 
-# 3) 启动（默认 8080）
+# 3) 起向量库（Chroma 0.5.23，首次会拉镜像）
+docker compose up -d
+
+# 4) 启动（默认 8080）
 java -jar target/safety-rag-qa-1.0.0.jar
 
 # 浏览器打开 http://localhost:8080
 ```
 
-`data/` 目录、向量库文件、`hosts` 都会在首次启动时按需自动创建，无需手工准备。
+`data/` 目录与 `hosts` 会在首次启动时按需自动创建，无需手工准备；
+向量库要单独起一个 Chroma（`docker compose up -d`，数据写在 `data/chroma-server/`）。
 完整的架构说明、接口列表、踩坑记录见 [README.md](README.md)。
 
 ---

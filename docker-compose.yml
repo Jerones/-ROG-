@@ -1,6 +1,7 @@
-# 一键启动 Chroma 向量数据库（默认向量库实现）
+# 一键启动 Chroma 向量数据库（本工程唯一的向量库实现）
 # 用法：在本目录执行  docker compose up -d
-# 然后正常启动 Spring Boot 应用即可（application.yml 默认连 localhost:8000）
+# 然后启动 Spring Boot 应用即可（application.yml 默认连 localhost:8000；
+# Chroma 在别的机器上时用 CHROMA_HOST=http://<ip> 指定）
 services:
   chroma:
     image: chromadb/chroma:0.5.23

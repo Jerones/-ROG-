@@ -11,6 +11,7 @@
 #   SKIP_BUILD=1 bash restart.sh # 只重启不打包
 #   NO_TEST=0 bash restart.sh    # 打包时跑全量测试（默认跳过）
 #   PIN_IP=1 bash restart.sh     # 先探测并固定百炼接入 IP 再启动
+#   CHROMA_HOST=http://192.168.1.20 bash restart.sh   # 换 Chroma 地址（默认 localhost:8000）
 #   JAVA_OPTS="-Xmx1g" bash restart.sh
 set -uo pipefail
 
@@ -22,6 +23,15 @@ JAR="target/safety-rag-qa-1.0.0.jar"
 LOG=".run.log"
 NO_TEST="${NO_TEST:-1}"
 HOSTS_FILE="$PROJECT_DIR/hosts"
+
+# Chroma 地址：环境变量优先，其次本地文件 .chroma-host（不提交，写本机常用地址），
+# 最后回落到 application.yml 的默认值 http://localhost:8000。
+# 向量库是必要依赖，地址不对就是启动失败，这里统一在脚本里决定，免得到处加参数。
+if [ -z "${CHROMA_HOST:-}" ] && [ -f "$PROJECT_DIR/.chroma-host" ]; then
+    CHROMA_HOST="$(head -1 "$PROJECT_DIR/.chroma-host" | tr -d '\r[:space:]')"
+fi
+CHROMA_HOST="${CHROMA_HOST:-http://localhost}"
+export CHROMA_HOST
 
 say() { printf '\033[36m[restart]\033[0m %s\n' "$*"; }
 die() { printf '\033[31m[restart] %s\033[0m\n' "$*" >&2; exit 1; }
@@ -99,7 +109,7 @@ start() {
         say "未找到 hosts（可选）：如需固定百炼 IP，先跑 python tools/pin_dashscope_ip.py"
     fi
 
-    say "启动服务：http://localhost:$PORT/"
+    say "启动服务：http://localhost:$PORT/（向量库 Chroma：$CHROMA_HOST）"
     nohup java "${extra[@]}" -jar "$JAR" --server.port="$PORT" > "$LOG" 2>&1 &
 
     local waited=0

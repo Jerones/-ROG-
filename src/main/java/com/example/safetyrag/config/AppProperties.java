@@ -6,7 +6,7 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  * 本项目自定义配置（对应 application.yml 中的 app.* 节点）。
  *
  * @param demoMode  演示模式：true 时使用本地兜底 Embedding + 抽取式回答，不调外部 API
- * @param dataDir   数据目录（原始文档、注册表 JSON、SimpleVectorStore 持久化文件）
+ * @param dataDir   数据目录（原始文档、注册表 JSON；向量不在本地，存 Chroma）
  * @param chunking  切分参数
  * @param retrieval 检索参数
  */

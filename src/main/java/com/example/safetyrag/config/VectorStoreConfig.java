@@ -2,62 +2,69 @@ package com.example.safetyrag.config;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.ai.chroma.vectorstore.ChromaApi;
+import org.springframework.ai.chroma.vectorstore.ChromaVectorStore;
 import org.springframework.ai.embedding.EmbeddingModel;
-import org.springframework.ai.vectorstore.SimpleVectorStore;
 import org.springframework.ai.vectorstore.VectorStore;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.context.annotation.Profile;
 
-import java.io.File;
-import java.nio.file.Path;
 import java.util.List;
 
 /**
- * 默认 VectorStore 配置：SimpleVectorStore（零外部依赖）。
+ * 向量库配置：Chroma（唯一实现）。
  *
- * <p>向量保存在内存中，并持久化到 {@code <data-dir>/simple-vector-store.json}，
- * 因此不装 Docker、不装 Chroma 也能完整跑通"上传 → 切分 → 向量化 → 检索 →
- * 引用溯源"全链路。这是本项目的**默认实现**，开箱即用。</p>
+ * <p>为什么自己装配而不用 Spring AI 的自动配置：Spring AI 1.0.0 的
+ * {@code initialize-schema} 判断"集合是否存在"的方式，是拿服务端返回的错误文案
+ * 去和固定字符串 {@code Collection [xxx] does not exists} 做**精确比较**；
+ * 而真实 Chroma（0.5.x / 0.6.x 都是）返回的是
+ * {@code Collection xxx does not exist.}（方括号、句点都不同），比较必然不相等，
+ * 于是"找不到集合"被当成真实异常抛出，应用启动即失败：
+ * {@code Collection safety-regulations does not exist.}
+ * 表现就是——**空的 Chroma 永远起不来，只有事先手工建过集合的库才能用**。</p>
  *
- * <p>只有显式启用 {@code chroma} profile 时才改用 Chroma，
- * 由 {@link ChromaVectorStoreConfig} 装配（两者用 profile 互斥，不会冲突）。</p>
- *
- * <p>能力边界（答辩时值得讲）：SimpleVectorStore 是**全量线性扫描**（O(N) 逐条算
- * 余弦相似度），没有 ANN 索引。本项目约 600 块、1024 维，单次检索在毫秒级，
- * 完全够用；数据量上万后才需要换 Chroma/pgvector 这类带索引的向量库。
- * 换句话说，这里换的不只是实现，也是"要不要为规模付出运维成本"的取舍。</p>
+ * <p>这里改成：先尝试读集合，读不到就依次确保 tenant / database / collection 存在，
+ * 然后再用 {@code initializeSchema(false)} 构建 VectorStore。这样换机器、清空
+ * Chroma 数据目录之后都能直接启动，不再依赖错误文案这种脆弱约定。</p>
  */
 @Configuration
-@Profile("!chroma")
 public class VectorStoreConfig {
 
     private static final Logger log = LoggerFactory.getLogger(VectorStoreConfig.class);
 
-    private static final String STORE_FILE_NAME = "simple-vector-store.json";
-    /** 记录这份向量文件是哪个 Embedding 模型生成的（换了模型必须重建索引）。 */
-    private static final String STORE_MODEL_FILE_NAME = "simple-vector-store.model";
+    @Value("${spring.ai.vectorstore.chroma.client.host:http://localhost}")
+    private String host;
+
+    @Value("${spring.ai.vectorstore.chroma.client.port:8000}")
+    private int port;
+
+    @Value("${spring.ai.vectorstore.chroma.collection-name:safety-regulations}")
+    private String collectionName;
+
+    @Value("${spring.ai.vectorstore.chroma.tenant-name:SpringAiTenant}")
+    private String tenantName;
+
+    @Value("${spring.ai.vectorstore.chroma.database-name:SpringAiDatabase}")
+    private String databaseName;
+
+    @Value("${spring.ai.vectorstore.chroma.initialize-schema:true}")
+    private boolean initializeSchema;
+
+    /** 实际使用的地址，仅用于报错提示。 */
+    private String baseUrl;
 
     /**
-     * 持久化文件位置。由 Bean 创建时按 {@code app.data-dir} 解析一次，
-     * 这样 {@code --app.data-dir} 对向量文件同样生效，不会出现
-     * "注册表写到了 A 目录、向量还在 B 目录"的错位。
-     */
-    private static volatile File storeFile = new File("./data/" + STORE_FILE_NAME);
-    /** 当前生效的 Embedding 模型标识，落盘时一并写入 .model 文件（见 persistIfSimple）。 */
-    private static volatile String embeddingModelTag = "unknown";
-
-    /**
-     * 带批量预取的 Embedding 装饰器。SimpleVectorStore 是逐块调 embedding 接口的
-     * （171 块 = 171 次 HTTPS），入门前先批量算好能少一个数量级的请求，
-     * 详见 {@link CachingEmbeddingModel}。
+     * 带批量预取的 Embedding 装饰器（进程内一份）。
+     *
+     * <p>写入时 Chroma 会把整批文档交给 EmbeddingModel，而这条路径默认是一条
+     * 文本一次请求。入库前先按 5 条/批把整篇算好放进缓存，后续逐条调用全部命中，
+     * 171 块的文档从 171 次 HTTPS 降到 35 次，详见 {@link CachingEmbeddingModel}。</p>
      */
     private static volatile CachingEmbeddingModel cachedEmbeddingModel;
 
     /**
-     * 入库前批量预热 embedding。非默认实现（如 Chroma profile）时返回 0 并跳过，
-     * 调用方不必判断当前用的是哪套向量库。
+     * 入库前批量预热 embedding。拿不到模型时返回 0，调用方不必判空。
      */
     public static int prefetchEmbeddings(List<String> texts) {
         CachingEmbeddingModel model = cachedEmbeddingModel;
@@ -68,66 +75,99 @@ public class VectorStoreConfig {
     }
 
     @Bean
-    public VectorStore simpleVectorStore(EmbeddingModel embeddingModel,
-                                         AppProperties properties,
-                                         @Value("${spring.ai.openai.embedding.options.model:unknown}") String modelName) {
-        storeFile = Path.of(properties.dataDirOrDefault(), STORE_FILE_NAME).toFile();
-        // 逐块调用 → 批量预取（见 CachingEmbeddingModel 类注释）
+    public ChromaApi chromaApi() {
+        String base = host.endsWith("/") ? host.substring(0, host.length() - 1) : host;
+        if (!base.contains("://")) {
+            base = "http://" + base;
+        }
+        this.baseUrl = base + ":" + port;
+        log.info("Chroma 服务地址：{}，集合：{}", baseUrl, collectionName);
+        return ChromaApi.builder().baseUrl(baseUrl).build();
+    }
+
+    @Bean
+    public VectorStore chromaVectorStore(ChromaApi chromaApi, EmbeddingModel embeddingModel) {
         CachingEmbeddingModel cachedModel = new CachingEmbeddingModel(embeddingModel);
         cachedEmbeddingModel = cachedModel;
-        // 演示模式的哈希向量与真实模型的语义向量**不能混在同一个库里**：
-        // 两者维度可能一样（都是 1024），不会报错，但余弦相似度不在同一量纲上，
-        // 真实向量（0.5 上下）会把哈希向量（0.0x）整体压死——表现为"老文档怎么都搜不到"。
-        // 记一个模型标识，下次启动对不上就明确提示重建索引。
-        embeddingModelTag = properties.demoMode() ? "hash-ngram" : modelName;
-        SimpleVectorStore store = SimpleVectorStore.builder(cachedModel).build();
-        if (storeFile.exists() && storeFile.length() > 0) {
+        if (initializeSchema) {
             try {
-                store.load(storeFile);
-                log.info("SimpleVectorStore 已从 {} 恢复历史向量", storeFile.getPath());
-                warnIfModelChanged();
-            } catch (Exception e) {
-                log.warn("SimpleVectorStore 历史文件加载失败，将以空库启动：{}", e.getMessage());
+                ensureCollection(chromaApi);
+            } catch (RuntimeException e) {
+                throw new IllegalStateException(failureHint(e), e);
             }
         }
-        log.info("当前 VectorStore 实现：SimpleVectorStore（内存 + 本地文件持久化，无需外部服务）");
+        ChromaVectorStore store = ChromaVectorStore.builder(chromaApi, cachedModel)
+                .tenantName(tenantName)
+                .databaseName(databaseName)
+                .collectionName(collectionName)
+                // 自己负责建集合，关掉 Spring AI 那套基于错误文案的判断
+                .initializeSchema(false)
+                .build();
+        log.info("当前 VectorStore 实现：ChromaVectorStore（远端服务，无本地向量文件）");
         return store;
     }
 
-    private static File modelFile() {
-        return new File(storeFile.getParentFile(), STORE_MODEL_FILE_NAME);
+    /**
+     * 把底层异常翻译成一句能直接照做的提示。
+     *
+     * <p>连不上 Chroma 是最常见的启动失败：没起服务、虚拟机没开机、地址配错。
+     * 默认的几十行 Bean 创建堆栈里只有一句 Connection refused，对使用者没有指导意义。</p>
+     */
+    private String failureHint(RuntimeException e) {
+        String msg = e.getMessage() == null ? "" : e.getMessage();
+        boolean unreachable = msg.contains("Connection refused")
+                || msg.contains("I/O error")
+                || msg.contains("connect timed out")
+                || msg.contains("UnknownHost")
+                || msg.contains("failed to connect");
+        if (!unreachable) {
+            return "初始化 Chroma 集合失败：" + msg;
+        }
+        return """
+                连不上 Chroma（%s）。向量库是这个应用的必要依赖，服务没起来就启动不了。
+
+                处理方式：
+                  1) 本机 Docker：docker compose up -d
+                  2) 远程/虚拟机：确认 Chroma 在跑且端口可达，然后指定地址
+                     CHROMA_HOST=http://<ip> bash restart.sh
+                  3) 先自检 Chroma 是否可用：python tools/chroma_selfcheck.py --url %s
+                详见 README「向量库（Chroma）」一节。""".formatted(baseUrl, baseUrl);
     }
 
-    /** 历史向量由另一个模型生成时给出可操作提示（不自动重建，避免启动时偷偷烧 embedding 配额）。 */
-    private static void warnIfModelChanged() {
-        File meta = modelFile();
-        if (!meta.exists()) {
-            return; // 老数据没有标识，无从比较，按当前模型处理
+    /**
+     * 确保集合可用：已存在就直接返回，读不到就把 tenant / database / collection 补齐。
+     *
+     * <p>读取失败一律按"不存在"处理并尝试创建——创建是幂等的（已存在会返回 409，
+     * 由 catch 吞掉并复查一次），比只认 404 更稳。</p>
+     */
+    private void ensureCollection(ChromaApi api) {
+        try {
+            api.getCollection(tenantName, databaseName, collectionName);
+            log.info("Chroma 集合已就绪：{}", collectionName);
+            return;
+        } catch (RuntimeException e) {
+            log.info("Chroma 集合 {} 读取失败（{}），尝试自动创建", collectionName, e.getMessage());
         }
         try {
-            String used = java.nio.file.Files.readString(meta.toPath()).strip();
-            if (!used.isEmpty() && !used.equals(embeddingModelTag)) {
-                log.warn("==============================================================");
-                log.warn("向量文件是「{}」生成的，当前 Embedding 模型是「{}」。", used, embeddingModelTag);
-                log.warn("两者相似度不在同一量纲上，检索会明显偏向新库：请到知识库菜单点一次『重建索引』。");
-                log.warn("==============================================================");
-            }
-        } catch (Exception e) {
-            log.debug("读取向量模型标识失败（不影响运行）：{}", e.getMessage());
+            api.createTenant(tenantName);
+            log.info("已创建 Chroma tenant：{}", tenantName);
+        } catch (RuntimeException e) {
+            log.debug("tenant {} 已存在或创建失败：{}", tenantName, e.getMessage());
         }
-    }
-
-    /** 入库/删除后由 KnowledgeBaseService 调用，把内存向量落盘。 */
-    public static void persistIfSimple(VectorStore vectorStore) {
-        if (vectorStore instanceof SimpleVectorStore simple) {
-            File target = storeFile;
-            target.getParentFile().mkdirs();
-            simple.save(target);
-            try {
-                java.nio.file.Files.writeString(modelFile().toPath(), embeddingModelTag);
-            } catch (Exception e) {
-                // 标识写失败只影响下次启动的提示，不应让入库失败
-            }
+        try {
+            api.createDatabase(tenantName, databaseName);
+            log.info("已创建 Chroma database：{}", databaseName);
+        } catch (RuntimeException e) {
+            log.debug("database {} 已存在或创建失败：{}", databaseName, e.getMessage());
+        }
+        try {
+            api.createCollection(tenantName, databaseName,
+                    new ChromaApi.CreateCollectionRequest(collectionName));
+            log.info("已创建 Chroma 集合：{}", collectionName);
+        } catch (RuntimeException e) {
+            // 并发启动时会撞 409，复查一次即可
+            api.getCollection(tenantName, databaseName, collectionName);
+            log.info("Chroma 集合已存在（另一实例已创建）：{}", collectionName);
         }
     }
 }

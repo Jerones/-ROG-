@@ -18,7 +18,7 @@ import java.util.Set;
 
 /**
  * 演示模式配置：当 app.demo-mode=true 时，注册一个本地兜底的 EmbeddingModel，
- * 并用 @Primary 让 VectorStore（Chroma / SimpleVectorStore）优先使用它，
+ * 并用 @Primary 让 VectorStore（Chroma）优先使用它，
  * 从而完全不依赖外部模型 API 也能完成"向量化 → 入库 → 相似度检索"全链路。
  *
  * <p>注意：这只是离线演示兜底实现，语义理解能力远弱于真实 Embedding 模型

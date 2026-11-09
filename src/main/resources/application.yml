@@ -14,7 +14,7 @@ server:
 spring:
   application:
     name: safety-rag-qa
-  # 关掉 Spring AI 的 Chroma 自动配置，改用 config/ChromaVectorStoreConfig 自行装配：
+  # 关掉 Spring AI 的 Chroma 自动配置，改用 config/VectorStoreConfig 自行装配：
   # Spring AI 1.0.0 靠"精确匹配错误文案"判断集合是否存在，而真实 Chroma 返回的文案
   # 对不上，导致空的向量库永远启动失败（Collection xxx does not exist.）。
   autoconfigure:
@@ -51,9 +51,8 @@ spring:
     #   通义千问:      https://dashscope.aliyuncs.com/compatible-mode
     openai:
       base-url: ${LLM_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode}
-      # 注意：这里只放占位符，绝不提交真实 key。
-      # 真实 key 通过环境变量 LLM_API_KEY 注入（IDEA 运行配置 / 命令行 / 系统环境变量均可）。
-      # 没有 key 时请把 app.demo-mode 设为 true（见文末），应用不会因缺少 key 而启动失败。
+      # 占位 key：未配置真实 key 时请保持 app.demo-mode=true（见文末），
+      # 应用不会因为没 key 而启动失败
       api-key: ${LLM_API_KEY:sk-placeholder-set-LLM_API_KEY-in-env}
       chat:
         options:
@@ -64,13 +63,27 @@ spring:
           # 通义 text-embedding-v3（1024 维）；也可替换为服务端提供的
           # bge-large-zh-v1.5 等兼容端点模型名
           model: ${LLM_EMBEDDING_MODEL:text-embedding-v3}
-
-# ---------- 向量库 ----------
-# 默认：SimpleVectorStore（内存 + data/simple-vector-store.json 持久化，零外部依赖），
-#       见 config/VectorStoreConfig.java —— 不装 Docker / Chroma 也能直接跑。
-# 可选：加 --spring.profiles.active=chroma 切到 Chroma，
-#       连接参数见 application-chroma.yml，装配见 config/ChromaVectorStoreConfig.java。
-# 两者靠 profile 互斥（!chroma / chroma），不会同时存在两个 VectorStore Bean。
+    # ---------- 向量库：Chroma（唯一实现） ----------
+    # 装配代码见 config/VectorStoreConfig.java：自己建 tenant/database/collection，
+    # 不依赖 Spring AI 的自动配置（它靠精确匹配错误文案判断集合是否存在，实测永远失败）。
+    #
+    # 前置条件（二选一，都要能访问下面的 host:port）：
+    #   1) 本机 Docker：      docker compose up -d
+    #   2) 远程/虚拟机 Docker：把 CHROMA_HOST 指过去即可（Chroma 本身不需要外网）
+    # 换地址只改环境变量，别改这里：
+    #   CHROMA_HOST=http://192.168.1.20 bash restart.sh
+    # Windows 本机 pip 版（chromadb + chroma-hnswlib）在写入时必段错误，见 README 实测记录。
+    vectorstore:
+      chroma:
+        client:
+          host: ${CHROMA_HOST:http://localhost}
+          port: ${CHROMA_PORT:8000}
+        # Spring AI 用固定名字的 tenant/database，一般不用改
+        tenant-name: ${CHROMA_TENANT:SpringAiTenant}
+        database-name: ${CHROMA_DATABASE:SpringAiDatabase}
+        collection-name: ${CHROMA_COLLECTION:safety-regulations}
+        # 由 VectorStoreConfig 负责建集合，这里保留语义上的开关
+        initialize-schema: true
 
 # ---------- 本项目自定义配置（对应 config/AppProperties） ----------
 app:

@@ -16,7 +16,6 @@ import org.springframework.ai.chroma.vectorstore.ChromaApi;
 import org.springframework.ai.document.Document;
 import org.springframework.ai.embedding.EmbeddingModel;
 import org.springframework.ai.vectorstore.VectorStore;
-import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.ResourceAccessException;
@@ -41,7 +40,7 @@ import java.util.concurrent.locks.ReentrantLock;
  *
  * <p>数据分工（答辩可讲）：</p>
  * <ul>
- *   <li>向量与相似检索 → Spring AI VectorStore（Chroma 或 SimpleVectorStore）；</li>
+ *   <li>向量与相似检索 → Spring AI VectorStore（Chroma）；</li>
  *   <li>文档元信息与块原文 → DocumentRegistry（data/registry.json）；</li>
  *   <li>关键词索引 → Bm25Index（内存，启动时按注册表重建）；</li>
  *   <li>原始文件 → data/docs/（重建索引时重新读取切分）。</li>
@@ -60,8 +59,8 @@ public class KnowledgeBaseService {
     private final HybridRetriever retriever;
     private final AppProperties properties;
     private final Path docsDir;
-    /** Chroma 专用：删除前先查"哪些 id 真的存在"，simple profile 下为空。 */
-    private final ObjectProvider<ChromaApi> chromaApiProvider;
+    /** 直接查 Chroma：删除前先确认"哪些 id 真的存在"（删不存在的 id 会打崩 0.5.x 服务端）。 */
+    private final ChromaApi chromaApi;
     /** 向量维度：入库时顺带记录（避免每次查统计都调一次 Embedding 接口）。 */
     private final AtomicInteger cachedDimension = new AtomicInteger(0);
 
@@ -97,6 +96,10 @@ public class KnowledgeBaseService {
     @Value("${spring.ai.vectorstore.chroma.database-name:SpringAiDatabase}")
     private String chromaDatabase;
 
+    /** 仅用于区分异常来源（embedding 故障 / Chroma 故障）。 */
+    @Value("${spring.ai.vectorstore.chroma.client.port:8000}")
+    private int chromaPort;
+
     public KnowledgeBaseService(VectorStore vectorStore,
                                 EmbeddingModel embeddingModel,
                                 DocumentIngestService ingestService,
@@ -104,7 +107,7 @@ public class KnowledgeBaseService {
                                 Bm25Index bm25Index,
                                 HybridRetriever retriever,
                                 AppProperties properties,
-                                ObjectProvider<ChromaApi> chromaApiProvider) {
+                                ChromaApi chromaApi) {
         this.vectorStore = vectorStore;
         this.embeddingModel = embeddingModel;
         this.ingestService = ingestService;
@@ -112,7 +115,7 @@ public class KnowledgeBaseService {
         this.bm25Index = bm25Index;
         this.retriever = retriever;
         this.properties = properties;
-        this.chromaApiProvider = chromaApiProvider;
+        this.chromaApi = chromaApi;
         this.docsDir = Path.of(properties.dataDirOrDefault(), "docs");
         try {
             Files.createDirectories(docsDir);
@@ -238,8 +241,8 @@ public class KnowledgeBaseService {
     }
 
     /**
-     * 每批交给 VectorStore 的块数。<b>注意它不等于 HTTP 请求数</b>：SimpleVectorStore
-     * 内部仍然是逐块调 embedding 的，真正的请求合并由 {@code CachingEmbeddingModel}
+     * 每批交给 VectorStore 的块数。<b>注意它不等于 HTTP 请求数</b>：Chroma 写入时
+     * 内部仍按块调 embedding，真正的请求合并由 {@code CachingEmbeddingModel}
      * 负责（5 条/请求）。这里分批的意义是控制单次写入的内存与回滚粒度。
      */
     private static final int EMBED_BATCH_SIZE = 10;
@@ -272,22 +275,31 @@ public class KnowledgeBaseService {
     }
 
     /**
-     * 向量写入失败的定位提示。默认的 SimpleVectorStore 下"写入失败"实际上是
-     * embedding（HTTP）失败，给 Chroma 的提示只会误导，因此按异常内容区分。
+     * 向量写入失败的定位提示。写入路径上有两个网络依赖：先调百炼算 embedding，
+     * 再把向量写进 Chroma，两类故障的处置方式完全不同，按异常内容区分。
      */
     private String writeFailureHint(Throwable e) {
         String message = String.valueOf(rootMessage(e)).toLowerCase(Locale.ROOT);
         boolean network = message.contains("connection reset") || message.contains("i/o error")
                 || message.contains("timed out") || message.contains("connection refused");
-        if (network && !isChromaInUse()) {
-            return "这是调用 Embedding 接口时的网络故障（百炼侧连接被重置），不是文档格式问题。"
-                    + "已自动重试多次仍失败，通常稍后重传即可；若持续出现，请检查到 dashscope.aliyuncs.com 的网络/代理是否稳定。";
+        if (!network) {
+            return VECTOR_STORE_HINT;
         }
-        return VECTOR_STORE_HINT;
+        if (looksLikeChromaFailure(message)) {
+            return "Chroma 写入失败。" + VECTOR_STORE_HINT;
+        }
+        return "这是调用 Embedding 接口时的网络故障（百炼侧连接被重置），不是文档格式问题。"
+                + "已自动重试多次仍失败，通常稍后重传即可；若持续出现，请检查到 dashscope.aliyuncs.com 的网络/代理是否稳定。";
     }
 
-    private boolean isChromaInUse() {
-        return chromaApiProvider.getIfAvailable() != null;
+    /**
+     * 异常文案是否指向 Chroma 而不是 embedding 接口。
+     *
+     * <p>Chroma 客户端抛出的连接类异常会带上完整 URI（含端口），embedding 侧的
+     * 异常则指向 dashscope / model 相关的地址，靠这两点区分足够稳。</p>
+     */
+    private boolean looksLikeChromaFailure(String message) {
+        return message.contains("chroma") || message.contains(":" + chromaPort);
     }
 
     private void addToStores(String docId, String docName, long fileSize, List<Document> chunks,
@@ -311,9 +323,9 @@ public class KnowledgeBaseService {
             progress.update(0, total);
         }
         // 0) 先批量预取 embedding，再写向量库。
-        //    SimpleVectorStore.add() 内部是**逐块**调 embedding 的（171 块 = 171 次 HTTPS），
-        //    任何一次连接被重置都会让整批失败——这正是"这篇 PDF 总入不进去"的根因。
-        //    这里一次性按 10 条/请求批量算好放进缓存，之后逐块调用全部命中缓存。
+        //    写入时向量库逐条调 embedding（171 块 = 171 次 HTTPS），任何一次连接被
+        //    重置都会让整批失败——这正是"这篇 PDF 总入不进去"的根因。
+        //    这里一次性按 5 条/请求批量算好放进缓存，之后逐块调用全部命中缓存。
         //    放在写向量之前还有个好处：失败时向量库干净，不需要回滚。
         VectorStoreConfig.prefetchEmbeddings(chunks.stream()
                 .map(c -> c.getText() == null ? "" : c.getText())
@@ -338,7 +350,6 @@ public class KnowledgeBaseService {
             deleteVectorsQuietly(writtenIds);
             throw e;
         }
-        VectorStoreConfig.persistIfSimple(vectorStore);
 
         // 2) 登记注册表 + BM25（登记失败则回滚刚写入的向量，避免向量库里的孤儿数据）
         try {
@@ -379,8 +390,7 @@ public class KnowledgeBaseService {
                 return;
             }
             withVectorStoreRetry("向量回滚", () -> vectorStore.delete(deletable));
-            VectorStoreConfig.persistIfSimple(vectorStore);
-            log.info("已回滚本次写入的 {} 条向量", deletable.size());
+                log.info("已回滚本次写入的 {} 条向量", deletable.size());
         } catch (Exception e) {
             log.warn("回滚 {} 条向量失败，向量库中可能残留脏数据（可在知识库菜单点『重建索引』清理）：{}",
                     ids.size(), e.getMessage());
@@ -396,21 +406,17 @@ public class KnowledgeBaseService {
      * （清空过 data/chroma-server、上一次入库中途失败、换了向量模型重建），
      * 直接按注册表删就必然踩中，表现就是"点重建索引 / 删完文档再上传就报错"。</p>
      *
-     * @return 存在 id 的集合；拿不到（simple profile、Chroma 不可用）时返回 {@code null}，
+     * @return 存在 id 的集合；拿不到（Chroma 不可用）时返回 {@code null}，
      *         调用方应据此**跳过删除**，宁可留下旧向量也不要打崩服务
      */
     private Set<String> existingVectorIds() {
-        ChromaApi api = chromaApiProvider.getIfAvailable();
-        if (api == null) {
-            return null;
-        }
         try {
-            ChromaApi.Collection collection = api.getCollection(chromaTenant, chromaDatabase, chromaCollection);
+            ChromaApi.Collection collection = chromaApi.getCollection(chromaTenant, chromaDatabase, chromaCollection);
             Set<String> ids = new HashSet<>();
             int offset = 0;
             int page = 500;
             while (true) {
-                ChromaApi.GetEmbeddingResponse response = api.getEmbeddings(
+                ChromaApi.GetEmbeddingResponse response = chromaApi.getEmbeddings(
                         chromaTenant, chromaDatabase, collection.id(),
                         new ChromaApi.GetEmbeddingsRequest(null, null, page, offset));
                 List<String> got = response.ids();
@@ -433,18 +439,12 @@ public class KnowledgeBaseService {
     /**
      * 从给定 id 中筛出向量库里真实存在的那些。
      *
-     * <p>默认（SimpleVectorStore）不需要筛：它就是一个内存 Map，删不存在的 key 是
-     * 幂等空操作，直接删才能真的把块删掉。<b>反过来若不筛而一律跳过，删除文档
-     * 就只销了注册表、向量还在库里</b>，检索时照样命中已删文档的块（引用卡片上
-     * 会显示一篇"列表里已经没有了"的文档）。</p>
-     *
-     * <p>只有 Chroma 需要先求交集（删不存在的 id 会让服务端段错误），
-     * 且拿不到现有 id 时宁可返回空、跳过删除。</p>
+     * <p>Chroma 0.5.x 删除**不存在的 id** 会让服务端崩溃退出（详见 README 的实测记录），
+     * 而"注册表里的 id"和"向量库里的 id"很容易不一致（清空过 Chroma、上一次入库中途
+     * 失败、换了向量模型重建）。所以删除前必须先求交集；拿不到现有 id 时宁可返回空、
+     * 跳过向量删除——留下几个孤儿向量只是检索多几条，打崩服务端则是全站不可用。</p>
      */
     private List<String> existingOnly(List<String> ids) {
-        if (chromaApiProvider.getIfAvailable() == null) {
-            return ids; // 非 Chroma：删除幂等，全量交给 VectorStore
-        }
         Set<String> existing = existingVectorIds();
         if (existing == null || existing.isEmpty()) {
             return List.of();
@@ -487,8 +487,7 @@ public class KnowledgeBaseService {
                 List<String> deletable = existingOnly(chunkIds);
                 if (!deletable.isEmpty()) {
                     withVectorStoreRetry("向量删除", () -> vectorStore.delete(deletable));
-                    VectorStoreConfig.persistIfSimple(vectorStore);
-                } else {
+                            } else {
                     log.info("向量库中未找到该文档的块，跳过向量删除：docId={}", docId);
                 }
             }
@@ -593,7 +592,6 @@ public class KnowledgeBaseService {
         } catch (IOException e) {
             throw new UncheckedIOException("重建索引失败", e);
         }
-        VectorStoreConfig.persistIfSimple(vectorStore);
         log.info("索引重建完成：成功 {} 篇，跳过重复 {} 篇，失败 {} 篇", count, skipped, failed.size());
         return new ReindexResult(count, skipped, failed);
     }
