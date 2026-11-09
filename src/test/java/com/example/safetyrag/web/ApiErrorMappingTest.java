@@ -1,6 +1,7 @@
 package com.example.safetyrag.web;
 
 import com.example.safetyrag.service.ChatService;
+import com.example.safetyrag.service.EvalService;
 import com.example.safetyrag.service.IngestJobService;
 import com.example.safetyrag.service.IngestPreviewService;
 import com.example.safetyrag.service.KnowledgeBaseService;
@@ -42,6 +43,12 @@ class ApiErrorMappingTest {
 
     @MockitoBean
     private IngestPreviewService ingestPreviewService;
+
+    // 评测接口也挂在 KnowledgeBaseController 上：@WebMvcTest 只扫 web 层，
+    // 没这个 mock 整个上下文都起不来（表现为 5 个用例一起报
+    // "No qualifying bean of type EvalService"）。
+    @MockitoBean
+    private EvalService evalService;
 
     @Test
     void blankQuestion_returns400WithReadableMessage() throws Exception {

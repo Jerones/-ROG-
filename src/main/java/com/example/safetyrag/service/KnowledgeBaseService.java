@@ -680,7 +680,10 @@ public class KnowledgeBaseService {
                         hit.clause(),
                         hit.page(),
                         truncate(hit.text(), 220),
-                        Math.round(hit.score() * 10000.0) / 10000.0))
+                        // 展示语义相似度而不是融合分：RRF 的融合分是 1/(60+名次) 量级（0.016），
+                        // 直接显示会让"检索测试"看起来像坏了。BM25 单独引入的块没有向量分，
+                        // 退回融合分（此时它就是唯一可用的分）。
+                        Math.round((hit.vectorScore() > 0 ? hit.vectorScore() : hit.score()) * 10000.0) / 10000.0))
                 .toList();
     }
 

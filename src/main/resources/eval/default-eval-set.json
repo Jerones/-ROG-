@@ -1,0 +1,153 @@
+{
+  "name": "施工安全规范内置评测集",
+  "description": "12 条正样本（6 条使用规范原词提问，6 条改写成不含原词的口语问法，用来区分语义检索与字面检索）+ 3 条负样本（知识库不该答的问题，用来测「无召回不编造」）。expectKeywords 命中任意一个即算该条被召回；expectDoc 仅作期望来源提示，不参与判定。",
+  "cases": [
+    {
+      "id": "q01",
+      "question": "工地进场的人头上要戴什么护具？",
+      "expectKeywords": [
+        "安全帽"
+      ],
+      "expectDoc": "JGJ59",
+      "negative": false,
+      "note": "口语化：问句不含「安全帽」"
+    },
+    {
+      "id": "q02",
+      "question": "楼外面围的那层绿网有什么规定？",
+      "expectKeywords": [
+        "密目式安全"
+      ],
+      "expectDoc": "JGJ59",
+      "negative": false,
+      "note": "语料原文写的是「密目式安全立网」，关键词不能写成「密目式安全网」——早期版本这里写错，把召回到正确原文的用例判成了未命中。"
+    },
+    {
+      "id": "q03",
+      "question": "脚手架和建筑物之间是怎么拉结的？",
+      "expectKeywords": [
+        "连墙件"
+      ],
+      "expectDoc": "JGJ59",
+      "negative": false,
+      "note": "口语化：问句不含「连墙件」"
+    },
+    {
+      "id": "q04",
+      "question": "剪刀撑与地面的夹角应该是多少？",
+      "expectKeywords": [
+        "剪刀撑",
+        "45"
+      ],
+      "expectDoc": "JGJ130",
+      "negative": false,
+      "note": "45°～60°，原条文在扣件式钢管脚手架规范 6.6.2"
+    },
+    {
+      "id": "q05",
+      "question": "挖基坑的时候边上怎么防止人掉下去？",
+      "expectKeywords": [
+        "临边防护"
+      ],
+      "expectDoc": "JGJ59",
+      "negative": false,
+      "note": "真实短板：口语化的「边上怎么防止人掉下去」被理解成基坑作业安全，召回的是上下通道与边坡支护，未指向临边防护。保留不改，作为能力边界的证据。"
+    },
+    {
+      "id": "q06",
+      "question": "楼里的竖向井道口怎么防坠落？",
+      "expectKeywords": [
+        "电梯井"
+      ],
+      "expectDoc": "JGJ59",
+      "negative": false,
+      "note": "口语化：问句不含「电梯井」，考察语义泛化"
+    },
+    {
+      "id": "q07",
+      "question": "作业层防护栏杆设置在什么高度？",
+      "expectKeywords": [
+        "防护栏杆",
+        "1.2"
+      ],
+      "expectDoc": "JGJ59",
+      "negative": false,
+      "note": "1.2m 和 0.6m 两道"
+    },
+    {
+      "id": "q08",
+      "question": "工地上的电箱是怎么分级配的？",
+      "expectKeywords": [
+        "三级配电"
+      ],
+      "expectDoc": "JGJ59",
+      "negative": false,
+      "note": "口语化：问句不含「三级配电」"
+    },
+    {
+      "id": "q09",
+      "question": "临时消防设施包括哪些？",
+      "expectKeywords": [
+        "临时消防设施",
+        "灭火器"
+      ],
+      "expectDoc": "GB50720",
+      "negative": false,
+      "note": "消防安全技术规范的术语定义"
+    },
+    {
+      "id": "q10",
+      "question": "吊篮作业人员的安全带应该怎么挂设？",
+      "expectKeywords": [
+        "安全锁扣",
+        "安全带"
+      ],
+      "expectDoc": "JGJ59",
+      "negative": false,
+      "note": "独立设置专用安全绳"
+    },
+    {
+      "id": "q11",
+      "question": "施工组织设计里需要编制哪些安全方案？",
+      "expectKeywords": [
+        "施工组织设计",
+        "临时用电"
+      ],
+      "expectDoc": "GB50656",
+      "negative": false,
+      "note": "安全生产管理规范 10.0.3"
+    },
+    {
+      "id": "q12",
+      "question": "作业层外侧挡脚板的高度要求是多少？",
+      "expectKeywords": [
+        "挡脚板",
+        "180"
+      ],
+      "expectDoc": "JGJ59",
+      "negative": false,
+      "note": "不小于 180mm"
+    },
+    {
+      "id": "n01",
+      "question": "今天食堂中午吃什么？",
+      "expectKeywords": [],
+      "negative": true,
+      "note": "负样本：知识库完全无关，应返回无召回"
+    },
+    {
+      "id": "n02",
+      "question": "怎么用 Python 写一个网页爬虫？",
+      "expectKeywords": [],
+      "negative": true,
+      "note": "负样本：跨领域问题"
+    },
+    {
+      "id": "n03",
+      "question": "明天上海的天气怎么样？",
+      "expectKeywords": [],
+      "negative": true,
+      "note": "负样本：时效性闲聊"
+    }
+  ]
+}

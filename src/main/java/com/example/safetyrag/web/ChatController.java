@@ -1,6 +1,5 @@
 package com.example.safetyrag.web;
 
-import com.example.safetyrag.rag.RetrievedChunk;
 import com.example.safetyrag.service.ChatService;
 import com.example.safetyrag.web.dto.ChatRequest;
 import com.example.safetyrag.web.dto.ChatResponse;
@@ -16,7 +15,6 @@ import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.server.ResponseStatusException;
 import reactor.core.publisher.Flux;
 
-import java.util.List;
 
 /**
  * 对话接口（前端"对话菜单"调用）。
@@ -49,23 +47,29 @@ public class ChatController {
     @PostMapping(value = "/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public Flux<ServerSentEvent<String>> stream(@RequestBody ChatRequest request) {
         validate(request);
-        // 先做检索：引用列表在流开始前就已确定，正文流完后一次性下发
-        ChatService.RetrievalOutcome outcome = chatService.retrieve(request);
-        List<RetrievedChunk> hits = outcome.hits();
+        // 先做「追问改写 + 检索」：引用列表在流开始前就已确定，正文流完后一次性下发。
+        // 改写要调一次模型（约 1~2 秒），所以这一段是同步阻塞的，前端在此期间显示等待态。
+        ChatService.Prepared prepared = chatService.prepare(request);
 
-        Flux<ServerSentEvent<String>> tokens = chatService.streamTokens(request, hits)
+        // 发生改写时先推一条 rewrite 事件，前端显示「已结合上下文理解为…」，
+        // 让用户有机会发现系统把追问理解偏了。
+        Flux<ServerSentEvent<String>> head = prepared.rewritten()
+                ? Flux.just(ServerSentEvent.<String>builder(prepared.question()).event("rewrite").build())
+                : Flux.empty();
+
+        Flux<ServerSentEvent<String>> tokens = chatService.streamTokens(prepared)
                 .map(token -> ServerSentEvent.<String>builder(token).event("token").build());
 
         String citationsJson;
         try {
-            citationsJson = objectMapper.writeValueAsString(outcome.citations());
+            citationsJson = objectMapper.writeValueAsString(prepared.citations());
         } catch (JsonProcessingException e) {
             citationsJson = "[]";
         }
         Flux<ServerSentEvent<String>> tail = Flux.just(
                 ServerSentEvent.<String>builder(citationsJson).event("citations").build(),
                 ServerSentEvent.<String>builder("").event("done").build());
-        return Flux.concat(tokens, tail);
+        return Flux.concat(head, tokens, tail);
     }
 
     /** 空问题直接 400：否则会带着 null 去拼检索请求，最后变成一句无关的 500。 */

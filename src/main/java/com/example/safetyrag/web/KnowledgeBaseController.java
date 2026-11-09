@@ -1,5 +1,6 @@
 package com.example.safetyrag.web;
 
+import com.example.safetyrag.service.EvalService;
 import com.example.safetyrag.service.IngestJobService;
 import com.example.safetyrag.service.IngestPreviewService;
 import com.example.safetyrag.service.KnowledgeBaseService;
@@ -52,13 +53,16 @@ public class KnowledgeBaseController {
     private final KnowledgeBaseService knowledgeBaseService;
     private final IngestJobService ingestJobService;
     private final IngestPreviewService previewService;
+    private final EvalService evalService;
 
     public KnowledgeBaseController(KnowledgeBaseService knowledgeBaseService,
                                    IngestJobService ingestJobService,
-                                   IngestPreviewService previewService) {
+                                   IngestPreviewService previewService,
+                                   EvalService evalService) {
         this.knowledgeBaseService = knowledgeBaseService;
         this.ingestJobService = ingestJobService;
         this.previewService = previewService;
+        this.evalService = evalService;
     }
 
     @GetMapping("/documents")
@@ -209,5 +213,27 @@ public class KnowledgeBaseController {
     public List<SearchHitDto> searchTest(@RequestBody SearchTestRequest request) {
         int topK = request.topK() == null ? 5 : Math.max(1, Math.min(request.topK(), 20));
         return knowledgeBaseService.searchTest(request.query(), topK);
+    }
+
+    /**
+     * 检索质量评测：同一批问题分别跑纯向量与混合检索，返回逐条结果与汇总指标。
+     *
+     * <p>这是一次同步的多轮检索（默认 15 条 × 2 种模式），耗时在数秒量级，
+     * 前端需自行显示加载态。请求体可省略，省略时按默认评测集、topK=5 全库执行。</p>
+     */
+    @PostMapping("/eval")
+    public EvalService.EvalReport eval(@RequestBody(required = false) EvalRequest request) {
+        try {
+            return evalService.run(
+                    request == null ? null : request.topK(),
+                    request == null ? null : request.docIds());
+        } catch (IllegalStateException e) {
+            // 演示模式 / 评测集读取失败，都属于"现在跑不了"，用 400 而不是 500
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, e.getMessage(), e);
+        }
+    }
+
+    /** 评测请求：topK 与限定范围都可省略。 */
+    public record EvalRequest(Integer topK, List<String> docIds) {
     }
 }

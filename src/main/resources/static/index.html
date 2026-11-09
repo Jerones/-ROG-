@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>施工安全规范问答 · RAG</title>
-    <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="style.css?v=17">
 </head>
 <body>
 <div class="layout">
@@ -45,6 +45,7 @@
                     <div id="chatEmpty" class="empty-state">
                         <h1 class="empty-title">施工安全规范问答</h1>
                         <p class="empty-sub">基于 RAG 的规范检索助手，回答只依据知识库原文，并附引用出处。</p>
+                        <p class="empty-stat" id="emptyStat"></p>
                         <div class="example-chips">
                             <button class="chip" onclick="askExample('安全帽佩戴有什么要求？')">安全帽佩戴有什么要求？</button>
                             <button class="chip" onclick="askExample('脚手架搭设有哪些规范？')">脚手架搭设有哪些规范？</button>
@@ -67,6 +68,9 @@
                                 <option value="10">10 条</option>
                             </select>
                         </label>
+                        <button class="btn-text scope-btn" id="scopeBtn" onclick="openScope()"
+                                title="限定只在这几篇文档里检索">范围：全部</button>
+                        <button class="btn-text" id="newChatBtn" onclick="newChat()" title="清空当前对话">＋ 新对话</button>
                         <span id="modeHint" class="mode-hint"></span>
                     </div>
                     <div class="composer-box">
@@ -136,25 +140,56 @@
 
                     <!-- 文档列表 -->
                     <div class="panel">
-                        <h3>文档列表</h3>
+                        <div class="panel-head">
+                            <h3>文档列表</h3>
+                            <input type="text" id="docFilter" class="doc-filter" placeholder="按文件名过滤…">
+                        </div>
                         <table class="doc-table">
                             <thead>
-                            <tr><th>文件名</th><th>大小</th><th>切分块数</th><th>入库时间</th><th>状态</th><th>操作</th></tr>
+                            <tr>
+                                <th class="sortable" data-sort="name">文件名</th>
+                                <th class="sortable" data-sort="size">大小</th>
+                                <th class="sortable" data-sort="chunks">切分块数</th>
+                                <th class="sortable" data-sort="time">入库时间</th>
+                                <th>状态</th>
+                                <th>操作</th>
+                            </tr>
                             </thead>
                             <tbody id="docTableBody">
                             <tr><td colspan="6" class="empty">加载中…</td></tr>
                             </tbody>
                         </table>
+                        <div class="table-foot" id="docSummary"></div>
                     </div>
 
                     <!-- 检索测试 -->
                     <div class="panel">
-                        <h3>检索测试（只召回，不生成）</h3>
+                        <div class="panel-head">
+                            <h3>检索测试（只召回，不生成）</h3>
+                            <span id="searchMeta" class="panel-meta"></span>
+                        </div>
                         <div class="search-row">
                             <input type="text" id="searchInput" placeholder="输入问题，只看召回结果，不生成回答">
                             <button class="btn-primary" onclick="searchTest()">测试召回</button>
                         </div>
                         <div id="searchResults"></div>
+                    </div>
+
+                    <!-- 检索质量评测：同一批问题跑纯向量与混合，给出可比较的指标 -->
+                    <div class="panel">
+                        <div class="panel-head">
+                            <h3>检索质量评测</h3>
+                            <span id="evalMeta" class="panel-meta"></span>
+                        </div>
+                        <p class="hint">
+                            用内置评测集（12 条正样本 + 3 条负样本）跑一遍召回。同一个问题分别走纯向量与混合检索，
+                            两条结果并排，才能看出 BM25 到底带来了多少提升；负样本测的是"该拒答时有没有乱召回"。
+                        </p>
+                        <div class="eval-actions">
+                            <button class="btn-primary" id="evalBtn" onclick="runEval()">开始评测</button>
+                            <span id="evalTip" class="tip"></span>
+                        </div>
+                        <div id="evalResult"></div>
                     </div>
                 </div>
             </div>
@@ -187,6 +222,33 @@
     </div>
 </div>
 
-<script src="app.js"></script>
+<!-- ============ 弹层：限定检索范围 ============ -->
+<div id="scopeModal" class="modal hidden">
+    <div class="modal-mask" onclick="closeScope()"></div>
+    <div class="modal-panel modal-panel-sm" role="dialog" aria-modal="true">
+        <div class="modal-head">
+            <div class="modal-title-wrap">
+                <div class="modal-title">限定检索范围</div>
+                <div class="modal-sub">全部不勾 = 在全库检索；勾选后只在这些文档里召回</div>
+            </div>
+            <button class="modal-close" onclick="closeScope()" title="关闭（Esc）">×</button>
+        </div>
+        <div class="modal-toolbar scope-toolbar">
+            <button class="btn-text" onclick="selectAllScope(true)">全选</button>
+            <button class="btn-text" onclick="selectAllScope(false)">清空</button>
+            <span id="scopeTip" class="tip"></span>
+        </div>
+        <div id="scopeList" class="scope-list"></div>
+        <div class="modal-foot">
+            <button class="btn-ghost" onclick="closeScope()">取消</button>
+            <button class="btn-primary" onclick="applyScope()">应用</button>
+        </div>
+    </div>
+</div>
+
+<!-- 轻提示（复制成功、删除失败等），不打断操作 -->
+<div id="toastHost" class="toast-host"></div>
+
+<script src="app.js?v=17"></script>
 </body>
 </html>

@@ -2,6 +2,7 @@ package com.example.safetyrag.service;
 
 import com.example.safetyrag.config.AppProperties;
 import com.example.safetyrag.rag.HybridRetriever;
+import com.example.safetyrag.rag.QuestionRewriter;
 import com.example.safetyrag.rag.RetrievedChunk;
 import com.example.safetyrag.web.dto.ChatRequest;
 import com.example.safetyrag.web.dto.ChatResponse;
@@ -18,6 +19,7 @@ import reactor.util.retry.Retry;
 
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -62,51 +64,72 @@ public class ChatService {
             """;
 
     private final HybridRetriever retriever;
+    private final QuestionRewriter rewriter;
     private final AppProperties properties;
     private final ObjectProvider<ChatModel> chatModelProvider;
     private volatile ChatClient chatClient;
 
     public ChatService(HybridRetriever retriever,
+                       QuestionRewriter rewriter,
                        AppProperties properties,
                        ObjectProvider<ChatModel> chatModelProvider) {
         this.retriever = retriever;
+        this.rewriter = rewriter;
         this.properties = properties;
         this.chatModelProvider = chatModelProvider;
     }
 
-    /** 检索结果 + 引用 DTO 的打包（流式接口也要先拿到引用）。 */
-    public record RetrievalOutcome(List<RetrievedChunk> hits, List<CitationDto> citations) {
+    /**
+     * 一次问答的准备结果。
+     *
+     * @param originalQuestion 用户原话（前端展示、日志用）
+     * @param question         实际用于检索与生成的问题：多轮追问时是改写后的独立问句
+     * @param rewritten        是否发生了改写（前端据此显示「已结合上下文理解为…」）
+     */
+    public record Prepared(String originalQuestion, String question, boolean rewritten,
+                           List<RetrievedChunk> hits, List<CitationDto> citations) {
     }
 
-    /** 执行检索并生成引用列表；hits 为空表示无召回。 */
-    public RetrievalOutcome retrieve(ChatRequest request) {
+    /**
+     * 准备一次问答：追问改写 → 混合检索 → 组装引用。
+     * 流式与非流式共用这一步，保证两条链路的召回结果完全一致。
+     */
+    public Prepared prepare(ChatRequest request) {
+        QuestionRewriter.Result rewritten = rewriter.enrich(
+                request.question(), request.historyOrEmpty());
         int topK = request.topK() == null ? 5 : Math.max(1, Math.min(request.topK(), 20));
-        List<RetrievedChunk> hits = retriever.retrieve(request.question(), topK);
+        List<RetrievedChunk> hits = retriever.retrieve(new HybridRetriever.Options(
+                rewritten.question(), topK, new HashSet<>(request.docIdsOrEmpty()), null));
         List<CitationDto> citations = new ArrayList<>();
         for (RetrievedChunk hit : hits) {
+            // 展示给用户的"相似度"必须是语义相似度本身，不能是融合分：
+            // RRF 的融合分量级是 1/(60+rank)，用户会看到 0.016 这种没法解释的值。
+            // BM25 单独引入的块没有向量分，退回融合分（此时它就是排序依据）。
+            double shown = hit.vectorScore() > 0 ? hit.vectorScore() : hit.score();
             citations.add(new CitationDto(
                     hit.docName(),
                     hit.clause(),
                     hit.page(),
                     truncate(hit.text(), 300),
-                    Math.round(hit.score() * 10000.0) / 10000.0));
+                    Math.round(shown * 10000.0) / 10000.0));
         }
-        return new RetrievalOutcome(hits, citations);
+        return new Prepared(request.question(), rewritten.question(),
+                rewritten.rewritten(), hits, citations);
     }
 
     /** 非流式问答。 */
     public ChatResponse ask(ChatRequest request) {
-        RetrievalOutcome outcome = retrieve(request);
-        if (outcome.hits().isEmpty()) {
+        Prepared prepared = prepare(request);
+        if (prepared.hits().isEmpty()) {
             return new ChatResponse(NOT_FOUND_MESSAGE, false, properties.demoMode(), List.of());
         }
         String answer;
         if (properties.demoMode()) {
-            answer = extractiveAnswer(request.question(), outcome.hits());
+            answer = extractiveAnswer(prepared.question(), prepared.hits());
         } else {
-            answer = callLlm(request.question(), outcome.hits());
+            answer = callLlm(prepared.question(), prepared.hits());
         }
-        return new ChatResponse(answer, true, properties.demoMode(), outcome.citations());
+        return new ChatResponse(answer, true, properties.demoMode(), prepared.citations());
     }
 
     /**
@@ -128,24 +151,26 @@ public class ChatService {
      *       换链路重试的成功率明显高于原地重试。</li>
      * </ol>
      */
-    public Flux<String> streamTokens(ChatRequest request, List<RetrievedChunk> hits) {
+    public Flux<String> streamTokens(Prepared prepared) {
+        List<RetrievedChunk> hits = prepared.hits();
+        String question = prepared.question();
         if (hits.isEmpty()) {
             return Flux.just(NOT_FOUND_MESSAGE);
         }
         if (properties.demoMode()) {
-            return chunkedFlux(extractiveAnswer(request.question(), hits), 25);
+            return chunkedFlux(extractiveAnswer(question, hits), 25);
         }
 
         Flux<String> model;
         try {
             model = chatClient().prompt()
                     .system(SYSTEM_PROMPT)
-                    .user(buildUserPrompt(request.question(), hits))
+                    .user(buildUserPrompt(question, hits))
                     .stream()
                     .content();
         } catch (Exception e) {
             log.warn("流式调用模型失败，降级为抽取式回答：{}", e.getMessage());
-            return chunkedFlux(extractiveAnswer(request.question(), hits), 25);
+            return chunkedFlux(extractiveAnswer(question, hits), 25);
         }
 
         // 记录"是否已经开始输出"与"发起时间"，用于判断这次失败值不值得重试
@@ -165,18 +190,18 @@ public class ChatService {
                     if (emitted.get()) {
                         // 已经吐出一部分，再让模型重答一遍会重复内容，直接补原文摘录收尾
                         return chunkedFlux("\n\n（模型连接中断，以下为召回到的规范条款原文）\n\n"
-                                + extractiveAnswer(request.question(), hits), 12);
+                                + extractiveAnswer(question, hits), 12);
                     }
                     // 还没吐出任何 token：先换一条链路（非流式 call，走 RestClient 的
                     // 连接池与重试策略，与 WebClient 不是同一批连接）补答一次。
                     // 实测 reset 是环境级偶发故障，换链路重试的成功率明显高于原地重试。
                     return Flux.defer(() -> {
-                                String answer = callLlmOrNull(request.question(), hits);
+                                String answer = callLlmOrNull(question, hits);
                                 if (answer != null) {
                                     log.info("非流式补答成功，回答 {} 字", answer.length());
                                     return chunkedFlux(answer, 12);
                                 }
-                                return chunkedFlux(extractiveAnswer(request.question(), hits), 12);
+                                return chunkedFlux(extractiveAnswer(question, hits), 12);
                             })
                             .subscribeOn(Schedulers.boundedElastic());
                 });

@@ -30,8 +30,9 @@ import static org.mockito.Mockito.when;
  * "知识库中未找到相关规范"成了死代码——实测问"今天食堂吃什么"能凑出 5 条
  * 食堂相关条款。</p>
  *
- * <p>修复后的规则：BM25 默认只给向量路已召回的候选加权，不自己决定"有没有
- * 召回"；演示模式（哈希向量无语义判别力）与向量库故障时才放开。</p>
+ * <p>修复后的规则：<b>"有没有召回"只由向量路决定</b>，BM25 无权单独构成召回；
+ * 但向量路一旦确认有召回，BM25 就可以补充字面强命中的新块（否则混合检索等于没开）。
+ * 演示模式（哈希向量无语义判别力）与向量库故障时才无条件放开 BM25。</p>
  */
 class HybridRetrieverTest {
 
@@ -82,13 +83,26 @@ class HybridRetrieverTest {
     }
 
     @Test
-    void bm25_doesNotPullInBlocksMissedByVector() {
-        // 向量只召回 c3；BM25 对"安全帽"命中的 c1 不应被拉进来
+    void bm25IntroduceOff_doesNotPullInBlocksMissedByVector() {
+        // introduceNew 显式关掉时的保守行为：向量只召回 c3，BM25 对"安全帽"命中的
+        // c1 不应被拉进来。这里的 false 是刻意传的——默认值已经是 true（见下一个用例）。
+        stubVector(scoredChunk("c3", 0.55));
+        List<RetrievedChunk> hits = retriever(false, false, 0.2, 1.0, false)
+                .retrieve("安全帽有什么要求", 5);
+        assertEquals(1, hits.size(), "关闭引入时只应保留向量路召回的 c3，实际：" + hits);
+        assertEquals("c3", hits.get(0).document().getId());
+    }
+
+    @Test
+    void bm25_canIntroduceNewBlocks_whenVectorHasRecall() {
+        // 默认配置（introduceNew 缺省 = true）下的混合行为：向量路确认"库里有答案"
+        // 之后，BM25 补进来的字面强命中块是**收益**而不是噪声——"安全帽"这种术语
+        // 恰恰是向量容易漏、BM25 容易抓的目标。这与上面的拒答用例并不矛盾：
+        // 那边的向量路是空的，BM25 一律不许救场。
         stubVector(scoredChunk("c3", 0.55));
         List<RetrievedChunk> hits = retriever(false, false, 0.2, 1.0, null)
                 .retrieve("安全帽有什么要求", 5);
-        assertEquals(1, hits.size(), "只应保留向量路召回的 c3，实际：" + hits);
-        assertEquals("c3", hits.get(0).document().getId());
+        assertEquals(2, hits.size(), "向量路有召回时应允许 BM25 引入字面命中块，实际：" + hits);
     }
 
     @Test
@@ -137,8 +151,10 @@ class HybridRetrieverTest {
                                       Double minBm25, Boolean introduceNew) {
         AppProperties properties = new AppProperties(demoMode, "./target/test-data",
                 new AppProperties.Chunking(500, 60),
-                new AppProperties.Retrieval(minScore, !hybridOff, 0.7, 0.3,
-                        minBm25, introduceNew));
+                // 单元测试固定用 weighted 融合 + margin=0：这些用例断言的是
+                // "阈值过滤 / BM25 能否救场"这类行为，不该随融合策略的默认值漂移。
+                new AppProperties.Retrieval(minScore, 0.0, !hybridOff, "weighted", 60,
+                        0.7, 0.3, minBm25, introduceNew));
         return new HybridRetriever(vectorStore, bm25Index, properties, registry);
     }
 
